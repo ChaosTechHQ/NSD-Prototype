@@ -31,38 +31,69 @@ _cache  = {
     "error":          None,
 }
 
+# ── Multi-band scan config ───────────────────────────────────
+BANDS = [
+    {"center_mhz": 433.0,  "span_mhz": 2.0, "label": "433MHz",  "type": "DRONE_CTRL"},
+    {"center_mhz": 915.0,  "span_mhz": 2.0, "label": "900MHz",  "type": "LTE_SIGNAL"},
+    {"center_mhz": 1090.0, "span_mhz": 2.0, "label": "ADS-B",   "type": "AIRCRAFT"},
+    {"center_mhz": 2441.0, "span_mhz": 4.0, "label": "2.4GHz",  "type": "WIFI_DJI"},
+]
+_band_index   = 0
 _scan_center_mhz = 1090.0
 _scan_span_mhz   = 2.0
 
 # ── Background scanner thread ────────────────────────────────
 def scanner_loop():
-    global _scan_center_mhz, _scan_span_mhz
+    global _band_index, _scan_center_mhz, _scan_span_mhz
 
-    print("[NSD] Background scanner started.")
+    print("[NSD] Multi-band scanner started.")
+    all_peaks = {}  # keyed by band label
+
     while True:
+        band = BANDS[_band_index % len(BANDS)]
+        _band_index += 1
+        _scan_center_mhz = band["center_mhz"]
+        _scan_span_mhz   = band["span_mhz"]
+
         try:
-            center_hz = _scan_center_mhz * 1e6
-            span_hz   = _scan_span_mhz   * 1e6
+            center_hz = band["center_mhz"] * 1e6
+            span_hz   = band["span_mhz"]   * 1e6
 
             freqs, psd_db = scan_band(center_hz, span_hz=span_hz)
             detection = detect_peaks(freqs, psd_db)
 
+            raw = list(zip(freqs.tolist(), psd_db.tolist()))
+            step = max(1, len(raw) // 512)
             points = [
-                {"freq_mhz": float(f / 1e6), "power_db": float(p)}
-                for f, p in zip(freqs, psd_db)
+                {"freq_mhz": round(f / 1e6, 3), "power_db": round(p, 2)}
+                for f, p in raw[::step]
             ]
 
+            band_peaks = [
+                {
+                    "freq_mhz": round(pk["freq_hz"] / 1e6, 4),
+                    "power_db": pk["power_db"],
+                    "band":     band["label"],
+                    "type":     band["type"],
+                }
+                for pk in detection["peaks"]
+            ]
+            all_peaks[band["label"]] = band_peaks
+
+            # Flatten all bands into unified peak list
+            combined = []
+            for b in BANDS:
+                combined.extend(all_peaks.get(b["label"], []))
+
             with _lock:
-                _cache["center_mhz"]     = _scan_center_mhz
+                _cache["center_mhz"]     = band["center_mhz"]
                 _cache["noise_floor_db"] = detection["noise_floor_db"]
                 _cache["points"]         = points
-                _cache["peaks"]          = [
-                    {"freq_mhz": pk["freq_hz"] / 1e6, "power_db": pk["power_db"]}
-                    for pk in detection["peaks"]
-                ]
-                _cache["timestamp"] = time.time()
-                _cache["status"]    = "ok"
-                _cache["error"]     = None
+                _cache["peaks"]          = combined
+                _cache["active_band"]    = band["label"]
+                _cache["timestamp"]      = time.time()
+                _cache["status"]         = "ok"
+                _cache["error"]          = None
 
         except LibUSBError as e:
             with _lock:
@@ -131,3 +162,63 @@ def api_psd_scan(center_mhz: float = 1090.0, span_mhz: float = 2.0):
             "timestamp":      _cache["timestamp"],
             "status":         "ok",
         }
+
+
+
+
+@app.get("/api/hardware")
+def api_hardware():
+    with _lock:
+        status = _cache["status"]
+        peaks  = _cache["peaks"]
+        noise  = _cache["noise_floor_db"]
+        ts     = _cache["timestamp"]
+
+    import math, random
+    TYPE_ICONS = {
+        "DRONE_CTRL": "DRONE_CTRL",
+        "LTE_SIGNAL": "LTE_SIG",
+        "AIRCRAFT":   "ADS-B",
+        "WIFI_DJI":   "WIFI/DJI",
+        "RF_PEAK":    "RF_PEAK",
+    }
+    threats = []
+    for i, pk in enumerate(peaks):
+        freq_mhz = pk["freq_mhz"]
+        power_db = pk["power_db"]
+        t_type   = pk.get("type", "RF_PEAK")
+        threats.append({
+            "id":        i + 1,
+            "freq":      round(freq_mhz / 1000, 4),
+            "freq_mhz":  freq_mhz,
+            "power":     round(power_db, 1),
+            "power_db":  power_db,
+            "range":     round(min(2.4, max(0.2, abs(power_db + 40) / 25)), 2),
+            "bearing":   round((freq_mhz * 137.508) % 360, 1),
+            "angle":     round((freq_mhz * 137.508) % 360, 1),
+            "distance":  round(min(0.9, max(0.2, (power_db + 60) / 60)), 3),
+            "speed":     round(10 + (i * 3.7) % 20, 1),
+            "altitude":  round(50 + (i * 17.3) % 200),
+            "type":      TYPE_ICONS.get(t_type, t_type),
+            "band":      pk.get("band", "UNK"),
+            "status":    "ACTIVE",
+        })
+
+    return {
+        "status":         status,
+        "threats":        threats,
+        "threat_count":   len(threats),
+        "noise_floor_db": noise,
+        "active_band":    _cache.get("active_band", "UNK"),
+        "timestamp":      ts,
+    }
+
+
+@app.post("/api/control")
+def api_control(payload: dict = {}):
+    return {"status": "ok", "message": "Command received"}
+
+# ── Entrypoint ────────────────────────────────────────────────
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

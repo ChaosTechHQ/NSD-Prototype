@@ -8,6 +8,7 @@ import json
 
 def acquire_iq(num_samples, center_freq_hz, sample_rate_hz=2_048_000, gain='auto'):
     sdr = RtlSdr()
+    sdr.direct_sampling = 0
     sdr.sample_rate = sample_rate_hz
     sdr.center_freq = center_freq_hz
     sdr.gain = gain
@@ -51,7 +52,7 @@ def compute_psd_fft(iq, sample_rate_hz):
 
     return freqs, psd_db
 
-def scan_band(center_freq_hz, span_hz=2_000_000, dwell_s=0.5,
+def scan_band(center_freq_hz, span_hz=2_000_000, dwell_s=0.1,
               sample_rate_hz=2_048_000):
     num_samples = int(sample_rate_hz * dwell_s)
     iq = acquire_iq(num_samples, center_freq_hz, sample_rate_hz)
