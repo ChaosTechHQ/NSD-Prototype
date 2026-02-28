@@ -110,14 +110,15 @@ input[type=range] { width:100%; accent-color:#00ff41; margin-top:3px; }
       <input type="range" id="thrSlider" min="0" max="100" value="70" oninput="updateAutonomous()">
     </div>
     <div class="sec" style="flex:1;overflow:hidden;display:flex;flex-direction:column;">
-      <div class="sec-title">ACTIVE THREATS (<span id="tCount">0</span>)</div>
+      <div class="sec-title">ACTIVE THREATS (<span id="tCount">0</span>) <span id="activeBand" style="color:#00ff41;font-size:10px;margin-left:8px;">◉ SCANNING...</span></div>
       <div id="noiseFloor">Noise floor: -- dB</div>
       <div id="tList" style="overflow-y:auto;flex:1;"></div>
     </div>
   </div>
 </div>
 <script>
-var API_BASE = 'http://localhost:8100';
+var API_BASE = 'http://localhost:8000';
+      var RF_BASE  = 'http://localhost:8000';
 var RF_Base = 'http://localhost:8000';
 var threats = [], systemState = {}, missionState = {}, autonomousMode = {}, rfSpectrum = {};
 var systemActive = false, currentMode = 'RF_JAM';
@@ -167,7 +168,8 @@ function drawRadar() {
     var pr = (Math.min(t.range||0.5,2.5)/2.5)*R;
     var px = cx+Math.sin(a)*pr, py = cy-Math.cos(a)*pr;
     var sc = t.threat_score||50;
-    var col = sc>70?'#ff4444':sc>40?'#ffaa00':'#00ff41';
+    var BAND_COLORS = {'433MHz':'#FFD700','900MHz':'#FF4444','ADS-B':'#00FF41','2.4GHz':'#00BFFF','UNK':'#FFA500'};
+    var col = BAND_COLORS[t.band] || (sc>70?'#ff4444':sc>40?'#ffaa00':'#00ff41');
     ctx.beginPath(); ctx.arc(px,py,9,0,Math.PI*2);
     ctx.strokeStyle=col; ctx.lineWidth=0.5; ctx.stroke();
     ctx.beginPath(); ctx.arc(px,py,5,0,Math.PI*2);
@@ -189,100 +191,105 @@ function drawSpectrum(freqs, powers, peaks) {
   var W = canvas.width, H = canvas.height;
 
   ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = '#000a00';
+  ctx.fillStyle = '#000d00';
   ctx.fillRect(0, 0, W, H);
-
   if (freqs.length === 0) return;
 
-  var minFreq  = freqs.reduce(function(a,b){ return a<b?a:b; });
-  var maxFreq  = freqs.reduce(function(a,b){ return a>b?a:b; });
-  var minPower = powers.reduce(function(a,b){ return a<b?a:b; });
-  var maxPower = powers.reduce(function(a,b){ return a>b?a:b; });
+  var pad = {l:38, r:10, t:8, b:18};
+  var gW = W - pad.l - pad.r;
+  var gH = H - pad.t - pad.b;
 
-  var pad = 30, gW = W - pad*2, gH = H - pad*2;
+  var minFreq = freqs[0], maxFreq = freqs[freqs.length-1];
 
-  // Grid
-  ctx.strokeStyle = 'rgba(0,100,0,0.3)';
-  ctx.lineWidth = 1;
-  for (var i = 0; i <= 4; i++) {
-    var y = pad + (gH/4)*i;
-    ctx.beginPath(); ctx.moveTo(pad,y); ctx.lineTo(W-pad,y); ctx.stroke();
+  // Smooth powers with 5-point moving average
+  var sm = powers.slice();
+  for (var i = 2; i < powers.length-2; i++) {
+    sm[i] = (powers[i-2]+powers[i-1]+powers[i]+powers[i+1]+powers[i+2]) / 5;
   }
 
-  // Spectrum line + fill
+  // Dynamic range: noise floor anchor + headroom
+  var sorted = sm.slice().sort(function(a,b){return a-b;});
+  var noiseFloor = sorted[Math.floor(sorted.length*0.15)];
+  var maxPow = sorted[sorted.length-1];
+  var dynRange = Math.max(maxPow - noiseFloor, 20);
+  var dispMin = noiseFloor - 5;
+  var dispMax = noiseFloor + dynRange + 8;
+
+  function toX(f) { return pad.l + ((f-minFreq)/(maxFreq-minFreq))*gW; }
+  function toY(p) { return pad.t + gH - ((p-dispMin)/(dispMax-dispMin))*gH; }
+
+  // Grid lines
+  ctx.strokeStyle = 'rgba(0,120,0,0.25)';
+  ctx.lineWidth = 0.5;
+  for (var g = 0; g <= 4; g++) {
+    var gy = pad.t + (gH/4)*g;
+    ctx.beginPath(); ctx.moveTo(pad.l, gy); ctx.lineTo(W-pad.r, gy); ctx.stroke();
+    var gv = dispMax - ((dispMax-dispMin)/4)*g;
+    ctx.fillStyle = 'rgba(0,180,0,0.7)';
+    ctx.font = '8px Courier New';
+    ctx.textAlign = 'right';
+    ctx.fillText(gv.toFixed(0)+'dB', pad.l-3, gy+3);
+  }
+
+  // Noise floor baseline
+  var nfY = toY(noiseFloor);
+  ctx.strokeStyle = 'rgba(255,200,0,0.35)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4,4]);
+  ctx.beginPath(); ctx.moveTo(pad.l, nfY); ctx.lineTo(W-pad.r, nfY); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Filled spectrum
   ctx.beginPath();
-  freqs.forEach(function(f, i) {
-    var x = pad + ((f-minFreq)/(maxFreq-minFreq))*gW;
-    var y = H-pad - ((powers[i]-minPower)/(maxPower-minPower))*gH;
-    i === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
-  });
+  ctx.moveTo(toX(freqs[0]), toY(sm[0]));
+  for (var i = 1; i < freqs.length; i++) {
+    ctx.lineTo(toX(freqs[i]), toY(sm[i]));
+  }
   ctx.strokeStyle = '#00ff41';
-  ctx.lineWidth = 1.5;
+  ctx.lineWidth = 1.2;
   ctx.stroke();
-  ctx.lineTo(W-pad, H-pad);
-  ctx.lineTo(pad, H-pad);
+  ctx.lineTo(toX(freqs[freqs.length-1]), H-pad.b);
+  ctx.lineTo(toX(freqs[0]), H-pad.b);
   ctx.closePath();
-  ctx.fillStyle = 'rgba(0,255,65,0.08)';
+  var grad = ctx.createLinearGradient(0, pad.t, 0, H-pad.b);
+  grad.addColorStop(0, 'rgba(0,255,65,0.35)');
+  grad.addColorStop(1, 'rgba(0,255,65,0.03)');
+  ctx.fillStyle = grad;
   ctx.fill();
 
-  // Peak markers
+  // Peak markers — circle + vertical line + freq label
   peaks.forEach(function(pk) {
-    var x = pad + ((pk.freq_mhz-minFreq)/(maxFreq-minFreq))*gW;
-    var y = H-pad - ((pk.power_db-minPower)/(maxPower-minPower))*gH;
-    ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI*2);
-    ctx.fillStyle = '#ff4444'; ctx.fill();
+    var px = toX(pk.freq_mhz);
+    var py = toY(pk.power_db);
+    if (py < pad.t || py > H-pad.b) return;
+    ctx.strokeStyle = 'rgba(255,60,60,0.6)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, H-pad.b); ctx.stroke();
+    ctx.beginPath(); ctx.arc(px, py, 4, 0, Math.PI*2);
+    ctx.fillStyle = '#ff3c3c'; ctx.fill();
+    ctx.strokeStyle = '#ff6666'; ctx.lineWidth = 1; ctx.stroke();
   });
 
-  // Freq labels
-  ctx.fillStyle = '#007700';
-  ctx.font = '9px Courier New';
+  // Freq axis labels
+  ctx.fillStyle = 'rgba(0,200,0,0.8)';
+  ctx.font = '8px Courier New';
   ctx.textAlign = 'center';
-  for (var j = 0; j <= 4; j++) {
-    var f = minFreq + ((maxFreq-minFreq)/4)*j;
-    var x = pad + (gW/4)*j;
-    ctx.fillText(f.toFixed(1), x, H-pad+12);
+  for (var k = 0; k <= 4; k++) {
+    var fv = minFreq + ((maxFreq-minFreq)/4)*k;
+    ctx.fillText(fv.toFixed(1), toX(fv), H-2);
   }
 }
 
-async function fetchRF() {
-  if (rfFetching) return;
-  rfFetching = true;
-  try {
-    var url = RF_BASE + '/api/psd_scan?center_mhz=1090&span_mhz=2';
-    var resp = await fetch(url);
-    if (!resp.ok) return;
-    var data = await resp.json();
-    if (data.status !== 'ok') return;
-
-    var freqs  = data.points.map(function(p){ return p.freq_mhz; });
-    var powers = data.points.map(function(p){ return p.power_db; });
-
-    drawSpectrum(freqs, powers, data.peaks);
-
-    // Update RF band bars with real peak data
-    var bands = { '433':0, '900':0, '2.4':0, 'other':0 };
-    data.peaks.forEach(function(pk) {
-      var f = pk.freq_mhz;
-      if      (f>=420  && f<=450)  bands['433']++;
-      else if (f>=880  && f<=930)  bands['900']++;
-      else if (f>=2400 && f<=2500) bands['2.4']++;
-      else                         bands['other']++;
-    });
-    var tot = Math.max(data.peaks.length, 1);
-    document.getElementById('rfb1').style.width = Math.round((bands['433']/tot)*100)+'%';
-    document.getElementById('rfc1').textContent = bands['433'];
-    document.getElementById('rfb2').style.width = Math.round((bands['900']/tot)*100)+'%';
-    document.getElementById('rfc2').textContent = bands['900'];
-    document.getElementById('rfb3').style.width = Math.round((bands['2.4']/tot)*100)+'%';
-    document.getElementById('rfc3').textContent = bands['2.4'];
-    document.getElementById('rfb4').style.width = Math.round((bands['other']/tot)*100)+'%';
-    document.getElementById('rfc4').textContent = bands['other'];
-
-  } catch(e) {
-    console.warn('RF fetch failed:', e.message);
-  } finally {
-    rfFetching = false;
-  }
+function fetchRF() {
+  fetch(RF_BASE + '/api/psd_scan')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (!data.points || data.points.length === 0) return;
+      var freqs  = data.points.map(function(p) { return p.freq_mhz; });
+      var powers = data.points.map(function(p) { return p.power_db; });
+      drawSpectrum(freqs, powers, data.peaks || []);
+    })
+    .catch(function(e) { console.warn('RF fetch:', e.message); });
 }
 
 setInterval(fetchRF, 2000);
@@ -302,6 +309,8 @@ function fetchData() {
         return t;
       });
       systemState = d.system_state || {};
+      noiseFloorDb = d.noise_floor_db || null;
+      activeBandName = d.active_band || null;
       missionState = d.mission_state || {};
       autonomousMode = d.autonomous_mode || {};
       rfSpectrum = d.rf_spectrum || {};
@@ -381,6 +390,10 @@ function updateUI() {
   var tot = Math.max(rfSpectrum.total||1,1);
   var sets = [['rfb1','rfc1',bands['433']||0],['rfb2','rfc2',bands['900']||0],['rfb3','rfc3',bands['2.4']||0],['rfb4','rfc4',bands['other']||0]];
   sets.forEach(function(s){ document.getElementById(s[0]).style.width=Math.round((s[2]/tot)*100)+'%'; document.getElementById(s[1]).textContent=s[2]; });
+  var nfEl = document.getElementById('noiseFloor');
+  if (nfEl) nfEl.textContent = 'Noise floor: ' + (noiseFloorDb != null ? noiseFloorDb.toFixed(1) : '--') + ' dB';
+  var abEl = document.getElementById('activeBand');
+  if (abEl && activeBandName) abEl.textContent = '◉ SCANNING: ' + activeBandName;
   document.getElementById('tCount').textContent = threats.length;
   document.getElementById('tList').innerHTML = threats.map(function(t) {
     var sc = t.threat_score||0;
@@ -393,36 +406,6 @@ function updateUI() {
 }
 
 // PROTOTYPE: NSD RF spectrum updater
-var API_PSD = 'http://10.0.0.153:8000';
-
-function drawSpectrum(freqs, powers, peaks) {
-  // Maps live PSD peaks into the existing RF band bars
-  // Bands: 433 MHz, 900 MHz, 1090 MHz (ADS-B), 2400 MHz
-  var bandCount = { '433': 0, '900': 0, '1090': 0, 'other': 0 };
-
-  peaks.forEach(function(pk) {
-    var f = pk.freq_mhz;
-    if      (f >= 420  && f <= 450)  bandCount['433']++;
-    else if (f >= 880  && f <= 930)  bandCount['900']++;
-    else if (f >= 1080 && f <= 1100) bandCount['1090']++;
-    else                             bandCount['other']++;
-  });
-
-  var tot = Math.max(peaks.length, 1);
-
-  // Reuse existing RF bar elements — relabel 2.4GHz slot as 1.09GHz for now
-  document.getElementById('rfb1').style.width = Math.round((bandCount['433']  / tot) * 100) + '%';
-  document.getElementById('rfc1').textContent = bandCount['433'];
-
-  document.getElementById('rfb2').style.width = Math.round((bandCount['900']  / tot) * 100) + '%';
-  document.getElementById('rfc2').textContent = bandCount['900'];
-
-  document.getElementById('rfb3').style.width = Math.round((bandCount['1090'] / tot) * 100) + '%';
-  document.getElementById('rfc3').textContent = bandCount['1090'];
-
-  document.getElementById('rfb4').style.width = Math.round((bandCount['other'] / tot) * 100) + '%';
-  document.getElementById('rfc4').textContent = bandCount['other'];
-}
 
 async function fetchPsd(centerMhz, spanMhz) {
   centerMhz = centerMhz || 1090.0;
@@ -444,7 +427,11 @@ async function updateSpectrum() {
 
     var nfEl = document.getElementById('noiseFloor');
     if (nfEl) {
-      nfEl.textContent = 'RF Noise Floor: ' + data.noise_floor_db.toFixed(1) + ' dB';
+      nfEl.textContent = 'Noise floor: ' + (data.noise_floor_db != null ? data.noise_floor_db.toFixed(1) : '--') + ' dB';
+    }
+    var abEl = document.getElementById("activeBand");
+    if (abEl && data.active_band) {
+      abEl.textContent = "◉ SCANNING: " + data.active_band;
     }
 
     // Inject real peak count into threat count area if bridge is offline
