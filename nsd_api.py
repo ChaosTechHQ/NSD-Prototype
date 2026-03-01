@@ -22,6 +22,8 @@ app.add_middleware(
 # ── Shared state ──────────────────────────────────────────────
 _start_time = time.time()
 _unique_threat_ids = set()
+_swarms_detected = 0
+_active_swarms = []
 _total_threats_detected = 0
 _lock   = threading.Lock()
 _cache  = {
@@ -68,6 +70,43 @@ def _expire_stale_threats(seen_freqs):
             _threat_tracker[b]["ttl"] -= 1
             if _threat_tracker[b]["ttl"] <= 0:
                 del _threat_tracker[b]
+
+
+def _detect_swarms(threats):
+    """
+    Group DRONE_CTRL threats within 2MHz of each other.
+    Returns (swarm_groups, threats_with_swarm_flag)
+    """
+    global _swarms_detected, _active_swarms
+    drone_threats = [t for t in threats if t["type"] == "DRONE_CTRL"]
+    swarm_groups  = []
+    used          = set()
+
+    for i, t in enumerate(drone_threats):
+        if i in used:
+            continue
+        group = [t]
+        for j, t2 in enumerate(drone_threats):
+            if j <= i or j in used:
+                continue
+            if abs(t["freq_mhz"] - t2["freq_mhz"]) <= 5.0:
+                group.append(t2)
+                used.add(j)
+        if len(group) >= 2:
+            swarm_groups.append(group)
+            used.add(i)
+
+    # Tag threats as swarm members
+    swarm_freqs = {t["freq_mhz"] for g in swarm_groups for t in g}
+    for t in threats:
+        t["swarm_member"] = t["freq_mhz"] in swarm_freqs
+
+    # Update cumulative swarm counter
+    if len(swarm_groups) > len(_active_swarms):
+        _swarms_detected += len(swarm_groups) - len(_active_swarms)
+    _active_swarms = swarm_groups
+
+    return swarm_groups, threats
 
 def scanner_loop():
     global _band_index, _scan_center_mhz, _scan_span_mhz
@@ -233,11 +272,13 @@ def api_hardware():
             "status":    "ACTIVE",
         })
 
+    for _t in threats: _t.setdefault("swarm_member", False)
+    swarm_groups, threats = _detect_swarms(threats)
     _expire_stale_threats([pk["freq_mhz"] for pk in peaks])
     uptime_sec = int(time.time() - _start_time)
     return {
         "status":         status,
-        "mission_state":  {"uptime_sec": uptime_sec, "threats_detected": _cache.get("total_detected", len(threats))},
+        "mission_state":  {"uptime_sec": uptime_sec, "threats_detected": _cache.get("total_detected", len(threats)), "swarms_detected": _swarms_detected, "active_swarms": len(_active_swarms)},
 
         "threats":        threats,
         "threat_count":   len(threats),
