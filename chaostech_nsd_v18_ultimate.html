@@ -128,7 +128,7 @@ input[type=range] { width:100%; accent-color:#00ff41; margin-top:3px; }
       <div class="ai-row"><input type="checkbox" id="aiEn" onchange="updateAutonomous()"><label for="aiEn">Enable Autonomous Mode</label></div>
       <div class="ai-row"><input type="checkbox" id="aiAuto" onchange="updateAutonomous()"><label for="aiAuto">Auto-Engage Threats</label></div>
       <div style="font-size:11px;color:#007700;">Threat Threshold: <span id="thrVal">70</span></div>
-      <input type="range" id="thrSlider" min="0" max="100" value="70" oninput="updateAutonomous()">
+      <input type="range" id="thrSlider" min="0" max="100" value="70" oninput="updateAutonomous(); document.getElementById('thrLabel').textContent=this.value;"><span id="thrLabel" style="color:#00ff41;margin-left:6px;font-size:11px;">70</span>
     </div>
     <div class="sec" style="flex:1;overflow:hidden;display:flex;flex-direction:column;">
       <div class="sec-title">ACTIVE THREATS (<span id="tCount">0</span>) <span id="activeBand" style="color:#00ff41;font-size:10px;margin-left:8px;">◉ SCANNING...</span></div>
@@ -143,6 +143,7 @@ var API_BASE = 'http://localhost:8000';
 var RF_Base = 'http://localhost:8000';
 var _prevBand = null;
 var threats = [], systemState = {}, missionState = {}, autonomousMode = {}, rfSpectrum = {};
+var _autonomousDirty = 0;  // timestamp of last user interaction
 var systemActive = false, currentMode = 'RF_JAM';
 
 var canvas = document.getElementById('radar');
@@ -191,7 +192,8 @@ function drawRadar() {
     var px = cx+Math.sin(a)*pr, py = cy-Math.cos(a)*pr;
     var sc = t.threat_score||50;
     var BAND_COLORS = {'433MHz':'#FFD700','900MHz':'#FF4444','ADS-B':'#00FF41','2.4GHz':'#00BFFF','UNK':'#FFA500'};
-    var col = BAND_COLORS[t.band] || (sc>70?'#ff4444':sc>40?'#ffaa00':'#00ff41');
+    var STATE_COLORS = {'NEUTRALIZED':'#ff0000','ENGAGED':'#ffaa00','DETECTED':'#00ff41'};
+    var col = STATE_COLORS[t.state] || BAND_COLORS[t.band] || (sc>70?'#ff4444':sc>40?'#ffaa00':'#00ff41');
     ctx.beginPath(); ctx.arc(px,py,9,0,Math.PI*2);
     ctx.strokeStyle=col; ctx.lineWidth=0.5; ctx.stroke();
     ctx.beginPath(); ctx.arc(px,py,5,0,Math.PI*2);
@@ -424,6 +426,7 @@ function setMode(mode, el) {
 }
 
 function updateAutonomous() {
+  _autonomousDirty = Date.now();
   var en = document.getElementById('aiEn').checked;
   var au = document.getElementById('aiAuto').checked;
   var th = parseInt(document.getElementById('thrSlider').value);
@@ -452,10 +455,14 @@ function updateUI() {
   btn.textContent = systemActive ? 'DEACTIVATE SYSTEM' : 'ACTIVATE SYSTEM';
   btn.className = systemActive ? 'btn btn-active' : 'btn';
   if (autonomousMode.enabled !== undefined) {
-    document.getElementById('aiEn').checked = autonomousMode.enabled;
-    document.getElementById('aiAuto').checked = autonomousMode.auto_engage||false;
+    if (Date.now() - _autonomousDirty > 5000) document.getElementById('aiEn').checked = autonomousMode.enabled;
+    if (Date.now() - _autonomousDirty > 5000) document.getElementById('aiAuto').checked = autonomousMode.auto_engage||false;
     var th = autonomousMode.threat_threshold||70;
-    document.getElementById('thrSlider').value = th;
+    if (Date.now() - _autonomousDirty > 5000) {
+      document.getElementById('thrSlider').value = th;
+      var lbl = document.getElementById('thrLabel');
+      if (lbl) lbl.textContent = th;
+    }
     document.getElementById('thrVal').textContent = th;
   }
   var ms = missionState || {};
