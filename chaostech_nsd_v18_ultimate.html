@@ -95,7 +95,7 @@ input[type=range] { width:100%; accent-color:#00ff41; margin-top:3px; }
       </div>
      <div class="panel">
        <div class="panel-title">&#9675; RF SPECTRUM ANALYSIS</div>
-       <canvas id="rfCanvas" width="320" height="120" style="width:100%;height:120px;background:#000a00;display:block;margin-bottom:6px;"></canvas>
+       <canvas id="rfCanvas" style="width:100%;height:130px;background:#000a00;display:block;margin-bottom:6px;"></canvas>
        <div class="rf-row"><span class="rf-lbl">0.43 GHz:</span><div class="rf-bg"><div class="rf-fill" id="rfb1" style="width:0%"></div></div><span class="rf-n" id="rfc1">0</span></div>
        <div class="rf-row"><span class="rf-lbl">0.90 GHz:</span><div class="rf-bg"><div class="rf-fill" id="rfb2" style="width:0%"></div></div><span class="rf-n" id="rfc2">0</span></div>
        <div class="rf-row"><span class="rf-lbl">2.40 GHz:</span><div class="rf-bg"><div class="rf-fill" id="rfb3" style="width:0%"></div></div><span class="rf-n" id="rfc3">0</span></div>
@@ -209,75 +209,118 @@ let rfFetching = false;
 function drawSpectrum(freqs, powers, peaks) {
   var canvas = document.getElementById('rfCanvas');
   if (!canvas) return;
+
+  // HiDPI sharp rendering
+  var rect  = canvas.getBoundingClientRect();
+  var dpr   = window.devicePixelRatio || 1;
+  var W     = Math.floor(rect.width  * dpr);
+  var H     = Math.floor(rect.height * dpr);
+  if (canvas.width !== W || canvas.height !== H) {
+    canvas.width  = W;
+    canvas.height = H;
+  }
   var ctx = canvas.getContext('2d');
-  var W = canvas.width, H = canvas.height;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  var CW = rect.width, CH = rect.height;
 
-  ctx.clearRect(0, 0, W, H);
+  ctx.clearRect(0, 0, CW, CH);
   ctx.fillStyle = '#000d00';
-  ctx.fillRect(0, 0, W, H);
-  if (freqs.length === 0) return;
+  ctx.fillRect(0, 0, CW, CH);
+  if (!freqs || freqs.length === 0) return;
 
-  var pad = {l:38, r:10, t:8, b:18};
-  var gW = W - pad.l - pad.r;
-  var gH = H - pad.t - pad.b;
-
+  var pad = {l:42, r:12, t:10, b:22};
+  var gW = CW - pad.l - pad.r;
+  var gH = CH - pad.t - pad.b;
   var minFreq = freqs[0], maxFreq = freqs[freqs.length-1];
 
-  // Smooth powers with 5-point moving average
-  var sm = powers.slice();
-  for (var i = 2; i < powers.length-2; i++) {
-    sm[i] = (powers[i-2]+powers[i-1]+powers[i]+powers[i+1]+powers[i+2]) / 5;
-  }
+  // Downsample to max 512 points for clean rendering
+  var step = Math.max(1, Math.floor(freqs.length / 512));
+  var sf = [], sp = [];
+  for (var i = 0; i < freqs.length; i += step) { sf.push(freqs[i]); sp.push(powers[i]); }
 
-  // Dynamic range: noise floor anchor + headroom
-  var sorted = sm.slice().sort(function(a,b){return a-b;});
-  var noiseFloor = sorted[Math.floor(sorted.length*0.15)];
-  var maxPow = sorted[sorted.length-1];
-  var dynRange = Math.max(maxPow - noiseFloor, 20);
-  var dispMin = noiseFloor - 5;
-  var dispMax = noiseFloor + dynRange + 8;
+  // 5-point smoothing
+  var sm = sp.slice();
+  for (var i = 2; i < sp.length-2; i++)
+    sm[i] = (sp[i-2]+sp[i-1]+sp[i]+sp[i+1]+sp[i+2]) / 5;
 
-  function toX(f) { return pad.l + ((f-minFreq)/(maxFreq-minFreq))*gW; }
-  function toY(p) { return pad.t + gH - ((p-dispMin)/(dispMax-dispMin))*gH; }
+  // Dynamic range
+  var sorted    = sm.slice().sort(function(a,b){return a-b;});
+  var noiseFloor = sorted[Math.floor(sorted.length * 0.15)];
+  var maxPow    = sorted[sorted.length - 1];
+  var dynRange  = Math.max(maxPow - noiseFloor, 20);
+  var dispMin   = noiseFloor - 3;
+  var dispMax   = noiseFloor + dynRange + 6;
 
-  // Grid lines
-  ctx.strokeStyle = 'rgba(0,120,0,0.25)';
-  ctx.lineWidth = 0.5;
+  function toX(f) { return pad.l + ((f-minFreq)/(maxFreq-minFreq||1))*gW; }
+  function toY(p) { return pad.t + gH - Math.min(gH, Math.max(0,((p-dispMin)/(dispMax-dispMin))*gH)); }
+
+  // Grid
+  ctx.strokeStyle = 'rgba(0,140,0,0.3)';
+  ctx.lineWidth   = 0.5;
   for (var g = 0; g <= 4; g++) {
     var gy = pad.t + (gH/4)*g;
-    ctx.beginPath(); ctx.moveTo(pad.l, gy); ctx.lineTo(W-pad.r, gy); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(pad.l, gy); ctx.lineTo(CW-pad.r, gy); ctx.stroke();
     var gv = dispMax - ((dispMax-dispMin)/4)*g;
-    ctx.fillStyle = 'rgba(0,180,0,0.7)';
-    ctx.font = '8px Courier New';
+    ctx.fillStyle = 'rgba(0,200,0,0.8)';
+    ctx.font = 'bold 9px Courier New';
     ctx.textAlign = 'right';
-    ctx.fillText(gv.toFixed(0)+'dB', pad.l-3, gy+3);
+    ctx.fillText(gv.toFixed(0)+'dB', pad.l-4, gy+3);
   }
 
-  // Noise floor baseline
+  // Freq labels (3 evenly spaced)
+  ctx.fillStyle = 'rgba(0,200,0,0.7)';
+  ctx.font = '8px Courier New';
+  ctx.textAlign = 'center';
+  for (var lx = 0; lx <= 2; lx++) {
+    var lf = minFreq + (maxFreq - minFreq) * lx / 2;
+    ctx.fillText(lf.toFixed(1), pad.l + gW * lx / 2, CH - 4);
+  }
+
+  // Noise floor dashed line
   var nfY = toY(noiseFloor);
-  ctx.strokeStyle = 'rgba(255,200,0,0.35)';
+  ctx.strokeStyle = 'rgba(255,200,0,0.5)';
   ctx.lineWidth = 1;
-  ctx.setLineDash([4,4]);
-  ctx.beginPath(); ctx.moveTo(pad.l, nfY); ctx.lineTo(W-pad.r, nfY); ctx.stroke();
+  ctx.setLineDash([3,3]);
+  ctx.beginPath(); ctx.moveTo(pad.l, nfY); ctx.lineTo(CW-pad.r, nfY); ctx.stroke();
   ctx.setLineDash([]);
 
-  // Filled spectrum
+  // Spectrum fill
   ctx.beginPath();
-  ctx.moveTo(toX(freqs[0]), toY(sm[0]));
-  for (var i = 1; i < freqs.length; i++) {
-    ctx.lineTo(toX(freqs[i]), toY(sm[i]));
-  }
+  ctx.moveTo(toX(sf[0]), toY(sm[0]));
+  for (var i = 1; i < sf.length; i++) ctx.lineTo(toX(sf[i]), toY(sm[i]));
   ctx.strokeStyle = '#00ff41';
-  ctx.lineWidth = 1.2;
+  ctx.lineWidth   = 1.5;
   ctx.stroke();
-  ctx.lineTo(toX(freqs[freqs.length-1]), H-pad.b);
-  ctx.lineTo(toX(freqs[0]), H-pad.b);
+  ctx.lineTo(toX(sf[sf.length-1]), CH-pad.b);
+  ctx.lineTo(toX(sf[0]),           CH-pad.b);
   ctx.closePath();
-  var grad = ctx.createLinearGradient(0, pad.t, 0, H-pad.b);
-  grad.addColorStop(0, 'rgba(0,255,65,0.35)');
-  grad.addColorStop(1, 'rgba(0,255,65,0.03)');
+  var grad = ctx.createLinearGradient(0, pad.t, 0, CH-pad.b);
+  grad.addColorStop(0, 'rgba(0,255,65,0.4)');
+  grad.addColorStop(1, 'rgba(0,255,65,0.02)');
   ctx.fillStyle = grad;
   ctx.fill();
+
+  // Peak markers — clean red mushrooms
+  if (peaks && peaks.length) {
+    peaks.forEach(function(pk) {
+      var px = toX(pk.freq_mhz);
+      var py = toY(pk.power_db);
+      if (px < pad.l || px > CW-pad.r) return;
+      ctx.beginPath();
+      ctx.arc(px, py, 3.5, 0, Math.PI*2);
+      ctx.fillStyle   = '#ff4444';
+      ctx.strokeStyle = '#ff0000';
+      ctx.lineWidth   = 1;
+      ctx.fill(); ctx.stroke();
+      // Stem
+      ctx.beginPath();
+      ctx.moveTo(px, py+3.5);
+      ctx.lineTo(px, CH-pad.b);
+      ctx.strokeStyle = 'rgba(255,60,60,0.25)';
+      ctx.lineWidth   = 0.8;
+      ctx.stroke();
+    });
+  }
 
   // Peak markers — circle + vertical line + freq label
   peaks.forEach(function(pk) {
@@ -355,6 +398,7 @@ function fetchData() {
 
 function toggleSystem() {
   systemActive = !systemActive;
+  updateUI();  // instant visual feedback
   fetch(API_BASE+'/api/control', {
     method:'POST',
     headers:{'Content-Type':'application/json'},
@@ -364,6 +408,10 @@ function toggleSystem() {
 }
 
 function setMode(mode, el) {
+  currentMode = mode;
+  document.querySelectorAll('.mbtn').forEach(function(b){ b.classList.remove('on'); });
+  if (el) el.classList.add('on');
+  document.getElementById('sDisrupt').textContent = mode;
   currentMode = mode;
   document.querySelectorAll('.mbtn').forEach(function(b){ b.classList.remove('on'); });
   if (el) el.classList.add('on');
@@ -410,17 +458,24 @@ function updateUI() {
     document.getElementById('thrSlider').value = th;
     document.getElementById('thrVal').textContent = th;
   }
-  var ms = missionState;
-  document.getElementById('uptime').textContent = fmtTime(ms.uptime_sec);
-  document.getElementById('mTD').textContent = ms.threats_detected||threats.length;
+  var ms = missionState || {};
+  // Uptime: client-side timer only (see _pageStart setInterval above)
+  // Unique RF Sources
+  document.getElementById('mTD').textContent = ms.threats_detected || threats.length || 0;
+  // Threats Engaged = threats with score >= 70
+  var engaged = threats.filter(function(t){ return (t.threat_score||0) >= 70; }).length;
+  document.getElementById('mTE').textContent = engaged;
+  // Swarms
+  document.getElementById('mSE').textContent = ms.swarms_eliminated || 0;
   document.getElementById('mTE').textContent = ms.threats_engaged||0;
   document.getElementById('mTN').textContent = ms.threats_neutralized||0;
   
   // Swarm alert
-  var activeSwarms = (typeof missionState !== 'undefined' && missionState.active_swarms) || 0;
+  var ms2 = missionState || {};
+  var activeSwarms = ms2.active_swarms || 0;
   var swarmEl = document.getElementById('swarmAlert');
   if (swarmEl) swarmEl.style.display = activeSwarms > 0 ? 'block' : 'none';
-  document.getElementById('mSD').textContent = (missionState && missionState.swarms_detected) || 0;
+  document.getElementById('mSD').textContent = ms2.swarms_detected || 0;
 
   // legacy fallback
   // document.getElementById('mSD').textContent = ms.swarms_detected||0;
