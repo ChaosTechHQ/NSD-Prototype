@@ -1,128 +1,60 @@
-# psd_scanner.py — PROTOTYPE, not production
-# ChaosTech Defense NSD — RF pipeline Layer 1
-
+# psd_scanner.py — matched exactly to nsd_api.py v18 key/unit expectations
 import numpy as np
 from rtlsdr import RtlSdr
 import time
-import json
 
-def acquire_iq(num_samples, center_freq_hz, sample_rate_hz=2_048_000, gain='auto'):
-    sdr = RtlSdr()
-    sdr.direct_sampling = 0
-    sdr.sample_rate = sample_rate_hz
-    sdr.center_freq = center_freq_hz
-    sdr.gain = gain
-    
+def scan_band(center_freq_hz, sample_rate_hz=2.4e6, num_samples=65536, gain='auto'):
+    """Returns (freqs_hz, psd_db) — freqs in Hz, nsd_api.py divides by 1e6 itself."""
+    sdr = None
     try:
-        # Discard first buffer — lets AGC settle
-        _ = sdr.read_samples(1024)
+        sdr = RtlSdr()
+        sdr.direct_sampling = 0
+        sdr.sample_rate     = sample_rate_hz
+        sdr.center_freq     = center_freq_hz
+        sdr.gain            = gain
+        time.sleep(0.15)
+        _  = sdr.read_samples(1024)
         iq = sdr.read_samples(num_samples)
-        return np.array(iq, dtype=np.complex64)
-    finally:
-        sdr.close()  # CRITICAL: always close immediately
+        sdr.close()
+    except Exception as e:
+        if sdr:
+            try: sdr.close()
+            except: pass
+        raise RuntimeError(f"SDR read failed at {center_freq_hz/1e6:.1f} MHz: {e}")
 
-def compute_psd_fft(iq, sample_rate_hz):
+    iq      = np.array(iq, dtype=np.complex64)
+    n       = len(iq)
+    window  = np.hanning(n)
+    fft_out = np.fft.fftshift(np.fft.fft(iq * window))
+    psd_db  = 10 * np.log10(np.abs(fft_out) ** 2 + 1e-12)
+    freq_bins = np.fft.fftshift(np.fft.fftfreq(n, d=1.0 / sample_rate_hz))
+    freqs_hz  = center_freq_hz + freq_bins   # ← Hz, NOT MHz
+
+    return freqs_hz, psd_db
+
+
+def detect_peaks(freqs_hz, psd_db, threshold_db=6.0):
     """
-    Simple FFT-based PSD estimator.
-    Uses at most 262144 samples to avoid huge arrays on 32-bit Python.
+    Takes (freqs_hz, psd_db). Returns dict with 'peaks' list using 'freq_hz' key.
+    Matches nsd_api.py line 76: pk['freq_hz'] / 1e6
     """
-    iq = np.asarray(iq).ravel()
-    n = iq.size
+    noise_floor = float(np.median(psd_db))
+    above       = psd_db - noise_floor
+    peak_idx    = np.where(above > threshold_db)[0]
 
-    if n < 2048:
-        raise ValueError(f"Not enough samples for PSD: got {n}")
-
-    # Hard cap to keep array sizes safe on 32-bit
-    max_n = 262144
-    if n > max_n:
-        iq = iq[:max_n]
-        n = max_n
-
-    # Hann window to reduce spectral leakage
-    window = np.hanning(n).astype(np.float32)
-    x = iq * window
-
-    # FFT and frequency axis
-    X = np.fft.fftshift(np.fft.fft(x))
-    freqs = np.fft.fftshift(np.fft.fftfreq(n, d=1.0 / sample_rate_hz))
-
-    # PSD estimate (power per bin, arbitrary units)
-    psd = (np.abs(X) ** 2) / (np.sum(window ** 2))
-    psd_db = 10.0 * np.log10(psd + 1e-12)
-
-    return freqs, psd_db
-
-def scan_band(center_freq_hz, span_hz=2_000_000, dwell_s=0.1,
-              sample_rate_hz=2_048_000):
-    num_samples = int(sample_rate_hz * dwell_s)
-    iq = acquire_iq(num_samples, center_freq_hz, sample_rate_hz)
-    print(f"[NSD] Got {iq.size} IQ samples at {center_freq_hz/1e6:.3f} MHz")
-    freqs, psd_db = compute_psd_fft(iq, sample_rate_hz)
-    freqs_abs = freqs + center_freq_hz
-    return freqs_abs, psd_db
-
-def detect_peaks(freqs_hz, psd_db,
-                 threshold_db=10.0,
-                 min_separation_hz=50_000):
-    median = np.median(psd_db)
-    thr = median + threshold_db
-
-    candidates = [
-        (float(f), float(p))
-        for f, p in zip(freqs_hz, psd_db)
-        if p > thr
-    ]
-
-    # Sort strongest-first
-    candidates.sort(key=lambda x: x[1], reverse=True)
-
-    # Enforce minimum frequency separation between reported peaks
     peaks = []
-    for f, p in candidates:
-        if all(abs(f - pf["freq_hz"]) >= min_separation_hz for pf in peaks):
-            peaks.append({"freq_hz": f, "power_db": p})
-        if len(peaks) >= 50:  # cap number of reported peaks
-            break
+    if len(peak_idx) > 0:
+        clusters = np.split(peak_idx, np.where(np.diff(peak_idx) > 10)[0] + 1)
+        for cluster in clusters:
+            best = cluster[np.argmax(psd_db[cluster])]
+            peaks.append({
+                "freq_hz":        float(freqs_hz[best]),        # ← Hz key
+                "power_db":       round(float(psd_db[best]), 2),
+                "above_noise_db": round(float(above[best]), 2),
+            })
 
     return {
-        "noise_floor_db": float(median),
-        "peaks": peaks,
+        "peaks":          peaks,
+        "noise_floor_db": round(noise_floor, 2),
+        "peak_count":     len(peaks),
     }
-
-def scan_to_json(center_freq_mhz, span_mhz, outfile):
-    center_hz = center_freq_mhz * 1e6
-    freqs, psd_db = scan_band(center_hz, span_hz=span_mhz * 1e6)
-    detection = detect_peaks(freqs, psd_db)
-
-    points = [
-        {"freq_hz": float(f), "power_db": float(p)}
-        for f, p in zip(freqs, psd_db)
-    ]
-
-    output = {
-        "center_freq_hz": center_hz,
-        "timestamp": time.time(),
-        "noise_floor_db": detection["noise_floor_db"],
-        "points": points,
-        "peaks": detection["peaks"],
-    }
-
-    with open(outfile, "w") as f:
-        json.dump(output, f)
-
-    print(f"[NSD] Scan complete.")
-    print(f"[NSD] Noise floor : {detection['noise_floor_db']:.1f} dB")
-    print(f"[NSD] Peaks found : {len(detection['peaks'])}")
-    for pk in detection["peaks"][:10]:
-        print(f"      {pk['freq_hz']/1e6:.3f} MHz  @ {pk['power_db']:.1f} dB")
-    print(f"[NSD] Output saved: {outfile}")
-
-
-if __name__ == "__main__":
-    # NESDR Nano 2 / R820T max ~1766 MHz
-    # Using 1090 MHz (ADS-B) for pipeline validation
-    scan_to_json(
-        center_freq_mhz=1090,
-        span_mhz=2,
-        outfile="psd_1090mhz.json"
-    )

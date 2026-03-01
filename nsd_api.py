@@ -59,7 +59,7 @@ def scanner_loop():
             center_hz = band["center_mhz"] * 1e6
             span_hz   = band["span_mhz"]   * 1e6
 
-            freqs, psd_db = scan_band(center_hz, span_hz=span_hz)
+            freqs, psd_db = scan_band(center_hz)
             detection = detect_peaks(freqs, psd_db)
 
             raw = list(zip(freqs.tolist(), psd_db.tolist()))
