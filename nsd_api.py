@@ -4,7 +4,7 @@
 import time
 import threading
 import numpy as np
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from rtlsdr.rtlsdr import LibUSBError
@@ -24,6 +24,8 @@ _start_time = time.time()
 _unique_threat_ids = set()
 _swarms_detected = 0
 _active_swarms = []
+_system_active = False
+_system_mode   = "RF_JAM"
 _total_threats_detected = 0
 _lock   = threading.Lock()
 _cache  = {
@@ -77,7 +79,7 @@ def _detect_swarms(threats):
     Group DRONE_CTRL threats within 2MHz of each other.
     Returns (swarm_groups, threats_with_swarm_flag)
     """
-    global _swarms_detected, _active_swarms
+    global _swarms_detected, _active_swarms, _system_active, _system_mode
     drone_threats = [t for t in threats if t["type"] == "DRONE_CTRL"]
     swarm_groups  = []
     used          = set()
@@ -107,6 +109,38 @@ def _detect_swarms(threats):
     _active_swarms = swarm_groups
 
     return swarm_groups, threats
+
+
+def _score_threat(freq_mhz, power_db, band, t_type, swarm_member, threat_id):
+    """
+    Score 0-100 based on:
+    - Band danger level   (0-40 pts)
+    - Signal power        (0-30 pts)
+    - Swarm membership    (0-20 pts)
+    - Persistence         (0-10 pts)
+    """
+    # Band/type danger weight
+    band_score = {
+        "DRONE_CTRL": 40,
+        "WIFI/DJI":   35,
+        "LTE_SIG":    15,
+        "ADS-B":      10,
+        "RF_PEAK":    20,
+    }.get(t_type, 20)
+
+    # Power score: normalize -20 to +100 dB range → 0-30 pts
+    power_score = min(30, max(0, int((power_db + 20) / 4)))
+
+    # Swarm bonus
+    swarm_score = 20 if swarm_member else 0
+
+    # Persistence score: longer tracked = higher score (0-10 pts)
+    bucket = round(freq_mhz, 3)
+    ttl_remaining = _threat_tracker.get(bucket, {}).get("ttl", 0)
+    persist_score = min(10, (5 - ttl_remaining) * 2 + 10)
+
+    total = min(100, band_score + power_score + swarm_score + persist_score)
+    return total
 
 def scanner_loop():
     global _band_index, _scan_center_mhz, _scan_span_mhz
@@ -270,11 +304,19 @@ def api_hardware():
             "type":      TYPE_ICONS.get(t_type, t_type),
             "band":      pk.get("band", "UNK"),
             "status":    "ACTIVE",
+            "threat_score": _score_threat(freq_mhz, power_db, pk.get("band",""), t_type, False, threat_id),
         })
 
     for _t in threats: _t.setdefault("swarm_member", False)
     swarm_groups, threats = _detect_swarms(threats)
     _expire_stale_threats([pk["freq_mhz"] for pk in peaks])
+
+    # Recalculate threat_score with accurate swarm_member flag
+    for _t in threats:
+        _t["threat_score"] = _score_threat(
+            _t["freq_mhz"], _t["power_db"], _t.get("band",""),
+            _t["type"], _t.get("swarm_member", False), _t["id"]
+        )
     uptime_sec = int(time.time() - _start_time)
     return {
         "status":         status,
@@ -283,14 +325,21 @@ def api_hardware():
         "threats":        threats,
         "threat_count":   len(threats),
         "noise_floor_db": noise,
+        "system_state":   {"active": _system_active, "mode": _system_mode, "power_level": 100, "energy_reserves": 100},
         "active_band":    _cache.get("active_band", "UNK"),
         "timestamp":      ts,
     }
 
 
 @app.post("/api/control")
-def api_control(payload: dict = {}):
-    return {"status": "ok", "message": "Command received"}
+async def api_control(request: Request):
+    global _system_active, _system_mode
+    body = await request.json()
+    if "active" in body:
+        _system_active = bool(body["active"])
+    if "mode" in body:
+        _system_mode = str(body["mode"])
+    return {"status": "ok", "active": _system_active, "mode": _system_mode}
 
 # ── Entrypoint ────────────────────────────────────────────────
 if __name__ == "__main__":
