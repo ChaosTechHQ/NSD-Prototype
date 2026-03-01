@@ -498,12 +498,22 @@ function updateUI() {
   if (abEl && activeBandName) abEl.textContent = '◉ SCANNING: ' + activeBandName;
   document.getElementById('tCount').textContent = threats.length;
   document.getElementById('tList').innerHTML = threats.map(function(t) {
-    var sc = t.threat_score||0;
+    var sc  = t.threat_score||0;
     var cls = sc>70?'hi':sc>40?'md':'';
     var scCls = sc>70?'sc-hi':sc>40?'sc-md':'sc-lo';
-    var icon = t.status==='JAMMED'?'[JAM]':t.swarm_member?'[SWM]':'[DET]';
-    var jam = t.jam_progress>0?'<div class="jam-bar"><div class="jam-fill" style="width:'+t.jam_progress+'%"></div></div>':'';
-    return '<div class="threat-card '+cls+'"><div class="t-hdr"><span class="t-id">'+t.id+' '+icon+' '+(t.type||'RF Source')+'</span><span class="t-score '+scCls+'">'+sc+'</span></div><div class="t-data">Freq: '+t.freq.toFixed(3)+' GHz | Power: '+t.power+' dBm | Range: '+t.range+' km</div><div class="t-data">Speed: '+t.speed+' m/s | Alt: '+t.altitude+'m | Bearing: '+t.bearing+'</div>'+jam+'</div>';
+    var state = t.state||'DETECTED';
+    var stateColor = state==='NEUTRALIZED'?'#ff4444':state==='ENGAGED'?'#ffaa00':'#00ff41';
+    var stateIcon  = state==='NEUTRALIZED'?'[NEUTRALIZED]':state==='ENGAGED'?'[ENGAGED]':t.swarm_member?'[SWARM]':'[DETECTED]';
+    var barW = Math.min(100, sc);
+    var barColor = sc>70?'#ff4444':sc>40?'#ffaa00':'#00ff41';
+    return '<div class="threat-card '+cls+'" style="border-left:3px solid '+stateColor+';margin-bottom:6px;padding:6px 8px;">'
+      + '<div class="t-hdr"><span class="t-id" style="color:'+stateColor+';">TGT-'+t.id+' '+(t.type||'RF')+'</span>'
+      + '<span class="t-score '+scCls+'" style="color:'+stateColor+';">'+sc+'</span></div>'
+      + '<div class="t-data" style="color:#aaffaa;">'+t.freq_mhz.toFixed(3)+' MHz | '+t.power_db.toFixed(1)+' dBm | '+t.band+'</div>'
+      + '<div class="t-data" style="color:'+stateColor+';font-weight:bold;">'+stateIcon+'</div>'
+      + '<div style="background:#001a00;border-radius:2px;height:4px;margin-top:4px;">'
+      + '<div style="width:'+barW+'%;height:4px;background:'+barColor+';border-radius:2px;transition:width 0.5s;"></div></div>'
+      + '</div>';
   }).join('');
 }
 
