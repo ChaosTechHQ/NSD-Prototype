@@ -72,7 +72,7 @@ input[type=range] { width:100%; accent-color:#00ff41; margin-top:3px; }
       <div class="panel">
         <div class="panel-title">&#9675; MISSION INTELLIGENCE</div>
         <div class="row"><span class="lbl">Uptime:</span><span class="val" id="uptime">0:00:00</span></div>
-        <div class="row"><span class="lbl">Threats Detected:</span><span class="val" id="mTD">0</span></div>
+        <div class="row"><span class="lbl">Unique RF Sources:</span><span class="val" id="mTD">0</span></div>
         <div class="row"><span class="lbl">Threats Engaged:</span><span class="val" id="mTE">0</span></div>
         <div class="row"><span class="lbl">Threats Neutralized:</span><span class="val" id="mTN">0</span></div>
         <div class="row"><span class="lbl">Swarms Detected:</span><span class="val" id="mSD">0</span></div>
@@ -464,6 +464,18 @@ setInterval(updateSpectrum, 5000);
 updateSpectrum();
 
 fetchData();
+
+var _pageStart = Date.now();
+setInterval(function() {
+  var elapsed = Math.floor((Date.now() - _pageStart) / 1000);
+  var h = Math.floor(elapsed / 3600);
+  var m = Math.floor((elapsed % 3600) / 60);
+  var s = elapsed % 60;
+  var fmt = h + ':' + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+  var el = document.getElementById('uptime');
+  if (el) el.textContent = fmt;
+}, 1000);
+
 setInterval(fetchData, 2000);
 </script>
 </body>

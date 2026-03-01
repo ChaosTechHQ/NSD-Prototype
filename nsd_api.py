@@ -20,6 +20,9 @@ app.add_middleware(
 )
 
 # ── Shared state ──────────────────────────────────────────────
+_start_time = time.time()
+_unique_threat_ids = set()
+_total_threats_detected = 0
 _lock   = threading.Lock()
 _cache  = {
     "center_mhz":     1090.0,
@@ -117,6 +120,8 @@ def scanner_loop():
                 _cache["timestamp"]      = time.time()
                 _cache["status"]         = "ok"
                 _cache["error"]          = None
+                for _bp in band_peaks: _unique_threat_ids.add(_bp["freq_mhz"])
+                _cache["total_detected"] = len(_unique_threat_ids)
 
         except LibUSBError as e:
             with _lock:
@@ -217,10 +222,10 @@ def api_hardware():
             "freq_mhz":  freq_mhz,
             "power":     round(power_db, 1),
             "power_db":  power_db,
-            "range":     round(min(2.4, max(0.2, abs(power_db + 40) / 25)), 2),
-            "bearing":   round((freq_mhz * 137.508) % 360, 1),
-            "angle":     round((freq_mhz * 137.508) % 360, 1),
-            "distance":  round(min(0.9, max(0.2, (power_db + 60) / 60)), 3),
+            "range":     round(0.3 + (threat_id * 0.618033) % 2.0, 2),
+            "bearing":   round((freq_mhz * 137.508 + threat_id * 23.7) % 360, 1),
+            "angle":     round((freq_mhz * 137.508 + threat_id * 23.7) % 360, 1),
+            "distance":  round(0.3 + (threat_id * 0.618033) % 2.0, 2),
             "speed":     round(10 + (threat_id * 3.7) % 20, 1),
             "altitude":  round(50 + (threat_id * 17.3) % 200),
             "type":      TYPE_ICONS.get(t_type, t_type),
@@ -229,8 +234,11 @@ def api_hardware():
         })
 
     _expire_stale_threats([pk["freq_mhz"] for pk in peaks])
+    uptime_sec = int(time.time() - _start_time)
     return {
         "status":         status,
+        "mission_state":  {"uptime_sec": uptime_sec, "threats_detected": _cache.get("total_detected", len(threats))},
+
         "threats":        threats,
         "threat_count":   len(threats),
         "noise_floor_db": noise,
