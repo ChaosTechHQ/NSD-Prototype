@@ -43,6 +43,29 @@ _scan_center_mhz = 1090.0
 _scan_span_mhz   = 2.0
 
 # ── Background scanner thread ────────────────────────────────
+
+# ── Threat persistence tracker ──────────────────────────────
+_threat_tracker  = {}  # freq_bucket -> {"id": int, "ttl": int}
+_next_threat_id  = 1
+
+def _assign_threat_id(freq_mhz, ttl=5):
+    global _next_threat_id
+    bucket = round(freq_mhz, 3)              # ~1 kHz buckets — unique per peak
+    if bucket not in _threat_tracker:
+        _threat_tracker[bucket] = {"id": _next_threat_id, "ttl": ttl}
+        _next_threat_id += 1
+    else:
+        _threat_tracker[bucket]["ttl"] = ttl  # refresh on re-detect
+    return _threat_tracker[bucket]["id"]
+
+def _expire_stale_threats(seen_freqs):
+    buckets = {round(f * 2) / 2 for f in seen_freqs}
+    for b in list(_threat_tracker.keys()):
+        if b not in buckets:
+            _threat_tracker[b]["ttl"] -= 1
+            if _threat_tracker[b]["ttl"] <= 0:
+                del _threat_tracker[b]
+
 def scanner_loop():
     global _band_index, _scan_center_mhz, _scan_span_mhz
 
@@ -59,8 +82,8 @@ def scanner_loop():
             center_hz = band["center_mhz"] * 1e6
             span_hz   = band["span_mhz"]   * 1e6
 
-            freqs, psd_db = scan_band(center_hz)
-            detection = detect_peaks(freqs, psd_db)
+            freqs, psd_db, fft_out = scan_band(center_hz)
+            detection = detect_peaks(freqs, psd_db, fft_out=fft_out)
 
             raw = list(zip(freqs.tolist(), psd_db.tolist()))
             step = max(1, len(raw) // 512)
@@ -183,12 +206,13 @@ def api_hardware():
         "RF_PEAK":    "RF_PEAK",
     }
     threats = []
-    for i, pk in enumerate(peaks):
-        freq_mhz = pk["freq_mhz"]
-        power_db = pk["power_db"]
-        t_type   = pk.get("type", "RF_PEAK")
+    for pk in peaks:
+        freq_mhz  = pk["freq_mhz"]
+        power_db  = pk["power_db"]
+        t_type    = pk.get("type", "RF_PEAK")
+        threat_id = _assign_threat_id(freq_mhz)
         threats.append({
-            "id":        i + 1,
+            "id":        threat_id,
             "freq":      round(freq_mhz / 1000, 4),
             "freq_mhz":  freq_mhz,
             "power":     round(power_db, 1),
@@ -197,13 +221,14 @@ def api_hardware():
             "bearing":   round((freq_mhz * 137.508) % 360, 1),
             "angle":     round((freq_mhz * 137.508) % 360, 1),
             "distance":  round(min(0.9, max(0.2, (power_db + 60) / 60)), 3),
-            "speed":     round(10 + (i * 3.7) % 20, 1),
-            "altitude":  round(50 + (i * 17.3) % 200),
+            "speed":     round(10 + (threat_id * 3.7) % 20, 1),
+            "altitude":  round(50 + (threat_id * 17.3) % 200),
             "type":      TYPE_ICONS.get(t_type, t_type),
             "band":      pk.get("band", "UNK"),
             "status":    "ACTIVE",
         })
 
+    _expire_stale_threats([pk["freq_mhz"] for pk in peaks])
     return {
         "status":         status,
         "threats":        threats,
