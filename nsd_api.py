@@ -25,7 +25,14 @@ _unique_threat_ids = set()
 _swarms_detected = 0
 _active_swarms = []
 _system_active = False
-_system_mode   = "RF_JAM"
+_system_mode         = "RF_JAM"
+_threats_engaged     = 0
+_threats_neutralized = 0
+_autonomous_actions  = 0
+_autonomous_enabled  = False
+_auto_engage         = False
+_threat_threshold    = 70
+_threat_states       = {}   # id -> "DETECTED"|"ENGAGED"|"NEUTRALIZED"
 _total_threats_detected = 0
 _lock   = threading.Lock()
 _cache  = {
@@ -59,7 +66,7 @@ def _assign_threat_id(freq_mhz, ttl=5):
     global _next_threat_id
     bucket = round(freq_mhz, 3)              # ~1 kHz buckets — unique per peak
     if bucket not in _threat_tracker:
-        _threat_tracker[bucket] = {"id": _next_threat_id, "ttl": ttl}
+        _threat_tracker[bucket] = {"id": _next_threat_id, "ttl": ttl, "first_seen": time.time()}
         _next_threat_id += 1
     else:
         _threat_tracker[bucket]["ttl"] = ttl  # refresh on re-detect
@@ -80,6 +87,7 @@ def _detect_swarms(threats):
     Returns (swarm_groups, threats_with_swarm_flag)
     """
     global _swarms_detected, _active_swarms, _system_active, _system_mode
+    global _threats_engaged, _threats_neutralized, _autonomous_actions, _threat_states
     drone_threats = [t for t in threats if t["type"] == "DRONE_CTRL"]
     swarm_groups  = []
     used          = set()
@@ -304,6 +312,7 @@ def api_hardware():
             "type":      TYPE_ICONS.get(t_type, t_type),
             "band":      pk.get("band", "UNK"),
             "status":    "ACTIVE",
+            "first_seen": _threat_tracker.get(round(freq_mhz, 3), {}).get("first_seen", time.time()),
             "threat_score": _score_threat(freq_mhz, power_db, pk.get("band",""), t_type, False, threat_id),
         })
 
@@ -317,19 +326,60 @@ def api_hardware():
             _t["freq_mhz"], _t["power_db"], _t.get("band",""),
             _t["type"], _t.get("swarm_member", False), _t["id"]
         )
+
+    global _threats_engaged, _threats_neutralized, _autonomous_actions, _threat_states
+    # ── Threat State Machine ─────────────────────────────────
+    now = time.time()
+    for t in threats:
+        tid = t["id"]
+        state = _threat_states.get(tid, "DETECTED")
+        age   = now - t.get("first_seen", now)
+
+        if state == "DETECTED" and _system_active and age > 4:
+            _threat_states[tid] = "ENGAGED"
+            _threats_engaged += 1
+            if _auto_engage and _autonomous_enabled:
+                _autonomous_actions += 1
+        elif state == "ENGAGED" and age > 10:
+            _threat_states[tid] = "NEUTRALIZED"
+            _threats_neutralized += 1
+
+        t["state"] = _threat_states.get(tid, "DETECTED")
+
+    # Clean up states for expired threats
+    active_ids = {t["id"] for t in threats}
+    for tid in list(_threat_states.keys()):
+        if tid not in active_ids:
+            del _threat_states[tid]
+
     uptime_sec = int(time.time() - _start_time)
     return {
         "status":         status,
-        "mission_state":  {"uptime_sec": uptime_sec, "threats_detected": _cache.get("total_detected", len(threats)), "swarms_detected": _swarms_detected, "active_swarms": len(_active_swarms)},
+        "mission_state":  {"uptime_sec": uptime_sec, "threats_detected": _cache.get("total_detected", len(threats)), "swarms_detected": _swarms_detected, "active_swarms": len(_active_swarms), "threats_engaged": _threats_engaged, "threats_neutralized": _threats_neutralized, "autonomous_actions": _autonomous_actions},
 
         "threats":        threats,
         "threat_count":   len(threats),
         "noise_floor_db": noise,
         "system_state":   {"active": _system_active, "mode": _system_mode, "power_level": 100, "energy_reserves": 100},
+        "autonomous_mode": {"enabled": _autonomous_enabled, "auto_engage": _auto_engage, "threat_threshold": _threat_threshold},
         "active_band":    _cache.get("active_band", "UNK"),
         "timestamp":      ts,
     }
 
+
+
+@app.post("/api/autonomous")
+async def api_autonomous(request: Request):
+    global _autonomous_enabled, _auto_engage, _threat_threshold
+    body = await request.json()
+    if "autonomous_enabled" in body:
+        _autonomous_enabled = bool(body["autonomous_enabled"])
+    if "auto_engage" in body:
+        _auto_engage = bool(body["auto_engage"])
+    if "threat_threshold" in body:
+        _threat_threshold = int(body["threat_threshold"])
+    return {"status": "ok", "autonomous_enabled": _autonomous_enabled,
+            "auto_engage": _auto_engage, "threat_threshold": _threat_threshold}
 
 @app.post("/api/control")
 async def api_control(request: Request):
