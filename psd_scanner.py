@@ -29,7 +29,7 @@ def scan_band(center_freq_hz, sample_rate_hz=2.4e6, num_samples=65536, gain='aut
     freqs_hz  = center_freq_hz + freq_bins
     return freqs_hz, psd_db, fft_out
 
-def detect_peaks(freqs_hz, psd_db, fft_out=None, threshold_db=20.0):
+def detect_peaks(freqs_hz, psd_db, fft_out=None, threshold_db=25.0):
     noise_floor = float(np.median(psd_db))
     above       = psd_db - noise_floor
     peak_idx    = np.where(above > threshold_db)[0]
@@ -46,5 +46,5 @@ def detect_peaks(freqs_hz, psd_db, fft_out=None, threshold_db=20.0):
                 "phase_rad":      phase,
             })
     peaks.sort(key=lambda x: x["power_db"], reverse=True)
-    peaks = peaks[:25]
+    peaks = peaks[:8]
     return {"peaks": peaks, "noise_floor_db": round(noise_floor, 2), "peak_count": len(peaks)}

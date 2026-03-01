@@ -61,6 +61,7 @@ _scan_span_mhz   = 2.0
 
 # ── Threat persistence tracker ──────────────────────────────
 _threat_tracker  = {}  # freq_bucket -> {"id": int, "ttl": int}
+_persistence     = {}  # freq_bucket -> consecutive scan count
 _next_threat_id  = 1
 
 def _assign_threat_id(freq_mhz, ttl=5):
@@ -235,6 +236,49 @@ _scanner_thread = threading.Thread(target=scanner_loop, daemon=True)
 _scanner_thread.start()
 
 
+
+# ── Band-specific minimum power above noise floor ─────────────
+BAND_MIN_ABOVE_NOISE = {
+    "433MHz":  20,   # drone control — moderate threshold
+    "900MHz":  25,   # LTE — needs strong signal
+    "ADS-B":   15,   # aircraft — lower OK, they broadcast strong
+    "2.4GHz":  30,   # WiFi/DJI — must be well above noise to flag
+}
+
+def _false_positive_filter(peaks, noise_floor_db):
+    """Remove peaks that don't meet band-specific power thresholds
+    and haven't persisted for 3+ consecutive scans."""
+    if noise_floor_db is None:
+        return peaks
+    filtered = []
+    for pk in peaks:
+        band     = pk.get("band", "UNK")
+        power_db = pk.get("power_db", 0)
+        above    = power_db - noise_floor_db
+        min_above = BAND_MIN_ABOVE_NOISE.get(band, 22)
+
+        # Layer 1: must be above band-specific threshold
+        if above < min_above:
+            continue
+
+        # Layer 2: persistence — must appear 3+ consecutive scans
+        bucket = round(pk["freq_mhz"], 1)
+        _persistence[bucket] = _persistence.get(bucket, 0) + 1
+        if _persistence.get(bucket, 0) < 3:
+            continue
+
+        filtered.append(pk)
+
+    # Decay persistence for unseen frequencies
+    seen = {round(pk["freq_mhz"], 1) for pk in peaks}
+    for b in list(_persistence.keys()):
+        if b not in seen:
+            _persistence[b] = max(0, _persistence[b] - 1)
+            if _persistence[b] == 0:
+                del _persistence[b]
+
+    return filtered
+
 # ── API endpoints ─────────────────────────────────────────────
 @app.get("/api/health")
 def api_health():
@@ -289,6 +333,7 @@ def api_hardware():
         noise  = _cache["noise_floor_db"]
         ts     = _cache["timestamp"]
 
+    peaks = _false_positive_filter(peaks, noise)
     import math, random
     TYPE_ICONS = {
         "DRONE_CTRL": "DRONE_CTRL",
