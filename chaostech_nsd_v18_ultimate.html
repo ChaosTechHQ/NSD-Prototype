@@ -511,6 +511,8 @@ function updateUI() {
       + '<div class="t-hdr"><span class="t-id" style="color:'+stateColor+';">TGT-'+t.id+' '+(t.type||'RF')+'</span>'
       + '<span class="t-score '+scCls+'" style="color:'+stateColor+';">'+sc+'</span></div>'
       + '<div class="t-data" style="color:#aaffaa;">'+t.freq_mhz.toFixed(3)+' MHz | '+t.power_db.toFixed(1)+' dBm | '+t.band+'</div>'
+      + '<div class="t-data" style="color:#ffff00;font-size:10px;">'+(t.protocol||t.type)+' — '+(t.confidence||0)+'% confidence</div>'
+      + '<div class="t-data" style="color:#888;font-size:9px;font-style:italic;">'+(t.description||'')+'</div>'
       + '<div class="t-data" style="color:'+stateColor+';font-weight:bold;">'+stateIcon+'</div>'
       + '<div style="background:#001a00;border-radius:2px;height:4px;margin-top:4px;">'
       + '<div style="width:'+barW+'%;height:4px;background:'+barColor+';border-radius:2px;transition:width 0.5s;"></div></div>'

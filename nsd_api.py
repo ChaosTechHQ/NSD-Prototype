@@ -347,6 +347,11 @@ def api_hardware():
         freq_mhz  = pk["freq_mhz"]
         power_db  = pk["power_db"]
         t_type    = pk.get("type", "RF_PEAK")
+        bw_hz     = pk.get("bandwidth_hz", 0)
+        above_db  = pk.get("above_noise_db", 0)
+        phase     = pk.get("phase_rad", 0)
+        band_lbl  = pk.get("band", "UNK")
+        protocol, confidence, description = _fingerprint_signal(freq_mhz, bw_hz, above_db, phase, band_lbl)
         threat_id = _assign_threat_id(freq_mhz)
         threats.append({
             "id":        threat_id,
@@ -361,6 +366,10 @@ def api_hardware():
             "speed":     round(10 + (threat_id * 3.7) % 20, 1),
             "altitude":  round(50 + (threat_id * 17.3) % 200),
             "type":      TYPE_ICONS.get(t_type, t_type),
+            "protocol":    protocol,
+            "confidence":  confidence,
+            "description": description,
+            "bandwidth_hz": bw_hz,
             "band":      pk.get("band", "UNK"),
             "status":    "ACTIVE",
             "first_seen": _threat_tracker.get(round(freq_mhz, 3), {}).get("first_seen", time.time()),
