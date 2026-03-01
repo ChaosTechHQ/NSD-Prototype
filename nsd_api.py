@@ -23,6 +23,7 @@ app.add_middleware(
 _start_time = time.time()
 _unique_threat_ids = set()
 _swarms_detected = 0
+_swarms_eliminated = 0
 _active_swarms = []
 _system_active = False
 _system_mode         = "RF_JAM"
@@ -86,7 +87,7 @@ def _detect_swarms(threats):
     Group DRONE_CTRL threats within 2MHz of each other.
     Returns (swarm_groups, threats_with_swarm_flag)
     """
-    global _swarms_detected, _active_swarms, _system_active, _system_mode
+    global _swarms_detected, _swarms_eliminated, _active_swarms, _system_active, _system_mode
     global _threats_engaged, _threats_neutralized, _autonomous_actions, _threat_states
     drone_threats = [t for t in threats if t["type"] == "DRONE_CTRL"]
     swarm_groups  = []
@@ -114,6 +115,11 @@ def _detect_swarms(threats):
     # Update cumulative swarm counter
     if len(swarm_groups) > len(_active_swarms):
         _swarms_detected += len(swarm_groups) - len(_active_swarms)
+    # Check for eliminated swarms (all members NEUTRALIZED)
+    for grp in _active_swarms:
+        if all(_threat_states.get(t["id"], "DETECTED") == "NEUTRALIZED" for t in grp):
+            _swarms_eliminated += 1
+
     _active_swarms = swarm_groups
 
     return swarm_groups, threats
@@ -355,7 +361,7 @@ def api_hardware():
     uptime_sec = int(time.time() - _start_time)
     return {
         "status":         status,
-        "mission_state":  {"uptime_sec": uptime_sec, "threats_detected": _cache.get("total_detected", len(threats)), "swarms_detected": _swarms_detected, "active_swarms": len(_active_swarms), "threats_engaged": _threats_engaged, "threats_neutralized": _threats_neutralized, "autonomous_actions": _autonomous_actions},
+        "mission_state":  {"uptime_sec": uptime_sec, "threats_detected": _cache.get("total_detected", len(threats)), "swarms_detected": _swarms_detected, "active_swarms": len(_active_swarms), "threats_engaged": _threats_engaged, "threats_neutralized": _threats_neutralized, "autonomous_actions": _autonomous_actions, "swarms_eliminated": _swarms_eliminated},
 
         "threats":        threats,
         "threat_count":   len(threats),
