@@ -143,6 +143,7 @@ var API_BASE = 'http://localhost:8000';
 var RF_Base = 'http://localhost:8000';
 var _prevBand = null;
 var threats = [], systemState = {}, missionState = {}, autonomousMode = {}, rfSpectrum = {};
+var noiseFloorDb = null, activeBandName = "";
 var _autonomousDirty = 0;  // timestamp of last user interaction
 var systemActive = false, currentMode = 'RF_JAM';
 
@@ -376,7 +377,7 @@ function fetchData() {
         return t;
       });
       systemState = d.system_state || {};
-      noiseFloorDb = d.noise_floor_db || null;
+      noiseFloorDb = (d.noise_floor_db !== undefined && d.noise_floor_db !== null) ? d.noise_floor_db : noiseFloorDb;
       activeBandName = d.active_band || null;
       if (activeBandName && _prevBand && activeBandName !== _prevBand) {
         var el = document.getElementById('tCount');
@@ -493,7 +494,7 @@ function updateUI() {
   var sets = [['rfb1','rfc1',bands['433']||0],['rfb2','rfc2',bands['900']||0],['rfb3','rfc3',bands['2.4']||0],['rfb4','rfc4',bands['other']||0]];
   sets.forEach(function(s){ document.getElementById(s[0]).style.width=Math.round((s[2]/tot)*100)+'%'; document.getElementById(s[1]).textContent=s[2]; });
   var nfEl = document.getElementById('noiseFloor');
-  if (nfEl) nfEl.textContent = 'Noise floor: ' + (noiseFloorDb != null ? noiseFloorDb.toFixed(1) : '--') + ' dB';
+  if (nfEl) nfEl.textContent = 'Noise floor: ' + (noiseFloorDb !== null ? noiseFloorDb.toFixed(1) : '--') + ' dB';
   var abEl = document.getElementById('activeBand');
   if (abEl && activeBandName) abEl.textContent = '◉ SCANNING: ' + activeBandName;
   document.getElementById('tCount').textContent = threats.length;
