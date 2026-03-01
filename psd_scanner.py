@@ -39,11 +39,13 @@ def detect_peaks(freqs_hz, psd_db, fft_out=None, threshold_db=25.0):
         for cluster in clusters:
             best  = cluster[np.argmax(psd_db[cluster])]
             phase = float(np.angle(fft_out[best])) if fft_out is not None else 0.0
+            bw_hz = float(freqs_hz[cluster[-1]] - freqs_hz[cluster[0]]) if len(cluster)>1 else 0.0
             peaks.append({
                 "freq_hz":        float(freqs_hz[best]),
                 "power_db":       round(float(psd_db[best]), 2),
                 "above_noise_db": round(float(above[best]), 2),
                 "phase_rad":      phase,
+                "bandwidth_hz":   round(abs(bw_hz), 1),
             })
     peaks.sort(key=lambda x: x["power_db"], reverse=True)
     peaks = peaks[:8]
