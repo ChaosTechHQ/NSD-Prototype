@@ -424,7 +424,7 @@ function setMode(mode, el) {
     headers:{'Content-Type':'application/json','X-NSD-Token':NSD_TOKEN},
     body:JSON.stringify({mode:mode})
   }).catch(function(){});
-  fetchData();
+  
 }
 
 function updateAutonomous() {
@@ -575,6 +575,8 @@ setInterval(function() {
 }, 1000);
 
 setInterval(fetchData, 2000);
+fetchData();  // immediate call on load — mirrors fetchRF pattern
+fetchData();  // immediate call on load — mirrors fetchRF pattern
 </script>
 </body>
 </html>
