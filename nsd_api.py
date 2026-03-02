@@ -4,6 +4,7 @@
 import time
 import threading
 import numpy as np
+import nsd_db
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -65,6 +66,9 @@ def _sanitize_threshold(val) -> int:
 
 # ── Shared state ──────────────────────────────────────────────
 _start_time = time.time()
+nsd_db.init_db()
+_next_threat_id = nsd_db.load_max_threat_id()
+print(f"[NSD] Threat ID counter restored: next_id={_next_threat_id}")
 _unique_threat_ids = set()
 _swarms_detected = 0
 _swarms_eliminated = 0
@@ -106,7 +110,7 @@ _scan_span_mhz   = 2.0
 # ── Threat persistence tracker ──────────────────────────────
 _threat_tracker  = {}  # freq_bucket -> {"id": int, "ttl": int}
 _persistence     = {}  # freq_bucket -> consecutive scan count
-_next_threat_id  = 1
+_next_threat_id  = 1  # overwritten below after DB init
 
 def _assign_threat_id(freq_mhz, ttl=5):
     global _next_threat_id
@@ -320,6 +324,12 @@ def scanner_loop():
                 for _bp in band_peaks: _unique_threat_ids.add(_bp["freq_mhz"])
                 _cache["total_detected"] = len(_unique_threat_ids)
                 _cache["threats"] = _build_threat_list(combined, detection["noise_floor_db"])
+                # ── Persist to SQLite ────────────────────────
+                nsd_db.save_scan(band["label"], len(_cache["threats"]),
+                                 detection["noise_floor_db"], "ok")
+                for _t in _cache["threats"]:
+                    nsd_db.upsert_threat(_t["id"], _t["freq_mhz"], _t.get("band",""),
+                                         _t["type"], _t["power_db"], _t["first_seen"])
 
         except LibUSBError as e:
             with _lock:
