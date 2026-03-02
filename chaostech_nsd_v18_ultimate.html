@@ -368,7 +368,7 @@ function fetchData() {
   fetch(API_BASE+'/api/hardware')
     .then(function(r){ return r.json(); })
     .then(function(d) {
-      threats = (d.threats||[]).map(function(t) {
+      var _newThreats = (d.threats||[]).map(function(t) {
         if (t.frequency && !t.freq) {
           t.freq = parseFloat(t.frequency.split(' ')[0]) / 1000;
         }
@@ -377,6 +377,7 @@ function fetchData() {
         t.altitude = t.altitude || (Math.floor(Math.random()*100)+50);
         return t;
       });
+      if (_newThreats.length > 0) threats = _newThreats;
       systemState = d.system_state || {};
       noiseFloorDb = (d.noise_floor_db !== undefined && d.noise_floor_db !== null) ? d.noise_floor_db : noiseFloorDb;
       activeBandName = d.active_band || null;
@@ -575,8 +576,8 @@ setInterval(function() {
 }, 1000);
 
 setInterval(fetchData, 2000);
-fetchData();  // immediate call on load — mirrors fetchRF pattern
-fetchData();  // immediate call on load — mirrors fetchRF pattern
+  // immediate call on load — mirrors fetchRF pattern
+  // immediate call on load — mirrors fetchRF pattern
 </script>
 </body>
 </html>
