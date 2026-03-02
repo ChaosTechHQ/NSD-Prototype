@@ -138,7 +138,9 @@ input[type=range] { width:100%; accent-color:#00ff41; margin-top:3px; }
   </div>
 </div>
 <script>
-var API_BASE = 'http://localhost:8000';
+var API_BASE = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+  ? 'http://localhost:8000'
+  : 'https://nsd.chaostechdefensellc.com';
       var RF_BASE  = 'http://localhost:8000';
 var RF_Base = 'http://localhost:8000';
 var _prevBand = null;
