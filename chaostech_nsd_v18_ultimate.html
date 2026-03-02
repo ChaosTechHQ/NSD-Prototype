@@ -143,6 +143,7 @@ var API_BASE = 'http://localhost:8000';
 var RF_Base = 'http://localhost:8000';
 var _prevBand = null;
 var threats = [], systemState = {}, missionState = {}, autonomousMode = {}, rfSpectrum = {};
+var NSD_TOKEN = "NSD-CHAOSTECH-2026";
 var noiseFloorDb = null, activeBandName = "";
 var _autonomousDirty = 0;  // timestamp of last user interaction
 var systemActive = false, currentMode = 'RF_JAM';
@@ -404,7 +405,7 @@ function toggleSystem() {
   updateUI();  // instant visual feedback
   fetch(API_BASE+'/api/control', {
     method:'POST',
-    headers:{'Content-Type':'application/json'},
+    headers:{'Content-Type':'application/json','X-NSD-Token':NSD_TOKEN},
     body:JSON.stringify({active:systemActive})
   }).catch(function(){});
   fetchData();
@@ -420,7 +421,7 @@ function setMode(mode, el) {
   if (el) el.classList.add('on');
   fetch(API_BASE+'/api/control', {
     method:'POST',
-    headers:{'Content-Type':'application/json'},
+    headers:{'Content-Type':'application/json','X-NSD-Token':NSD_TOKEN},
     body:JSON.stringify({mode:mode})
   }).catch(function(){});
   fetchData();
@@ -434,7 +435,7 @@ function updateAutonomous() {
   document.getElementById('thrVal').textContent = th;
   fetch(API_BASE+'/api/control', {
     method:'POST',
-    headers:{'Content-Type':'application/json'},
+    headers:{'Content-Type':'application/json','X-NSD-Token':NSD_TOKEN},
     body:JSON.stringify({autonomous_enabled:en,auto_engage:au,threat_threshold:th})
   }).catch(function(){});
 }
