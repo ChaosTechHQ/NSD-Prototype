@@ -5,6 +5,9 @@ import time
 import threading
 import numpy as np
 import nsd_db
+from dotenv import load_dotenv
+load_dotenv()
+import os
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -32,7 +35,7 @@ import hashlib, logging
 from fastapi import HTTPException
 
 # ── Security config ───────────────────────────────────────────
-_API_TOKEN    = "NSD-CHAOSTECH-2026"   # Change before any network demo
+_API_TOKEN = os.getenv("NSD_API_TOKEN", "")  # loaded from .env
 _AUDIT_LOG    = []                      # In-memory audit trail
 
 def _require_auth(request: Request):
@@ -494,6 +497,17 @@ def api_history(request: Request):
         "scans":   nsd_db.get_scan_history(50),
         "threats": nsd_db.get_threat_history(100),
     })
+
+@app.get("/api/token")
+@limiter.limit("5/minute")
+def api_token(request: Request):
+    """Serve token to local clients only — HTML fetches on load."""
+    client = request.client.host
+    if client not in ("127.0.0.1", "::1", "localhost"):
+        from fastapi.responses import JSONResponse as JR
+        return JR(status_code=403, content={"error": "local only"})
+    return {"token": _API_TOKEN}
+
 @app.post("/api/autonomous")
 @limiter.limit("10/minute")
 async def api_autonomous(request: Request):
