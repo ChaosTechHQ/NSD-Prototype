@@ -486,6 +486,14 @@ def api_hardware(request: Request):
         }
 
 
+
+@app.get("/api/history")
+@limiter.limit("20/minute")
+def api_history(request: Request):
+    return JSONResponse({
+        "scans":   nsd_db.get_scan_history(50),
+        "threats": nsd_db.get_threat_history(100),
+    })
 @app.post("/api/autonomous")
 @limiter.limit("10/minute")
 async def api_autonomous(request: Request):
