@@ -9,8 +9,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from rtlsdr.rtlsdr import LibUSBError
 from psd_scanner import scan_band, detect_peaks
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 app = FastAPI()
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -325,7 +331,8 @@ def _false_positive_filter_DISABLED(peaks, noise_floor_db):
 
 # ── API endpoints ─────────────────────────────────────────────
 @app.get("/api/health")
-def api_health():
+@limiter.limit("30/minute")
+def api_health(request: Request):
     with _lock:
         status    = _cache["status"]
         timestamp = _cache["timestamp"]
@@ -337,7 +344,8 @@ def api_health():
 
 
 @app.get("/api/psd_scan")
-def api_psd_scan(center_mhz: float = 1090.0, span_mhz: float = 2.0):
+@limiter.limit("60/minute")
+def api_psd_scan(request: Request, center_mhz: float = 1090.0, span_mhz: float = 2.0):
     global _scan_center_mhz, _scan_span_mhz
 
     # Update scan target if changed
@@ -370,7 +378,8 @@ def api_psd_scan(center_mhz: float = 1090.0, span_mhz: float = 2.0):
 
 
 @app.get("/api/hardware")
-def api_hardware():
+@limiter.limit("60/minute")
+def api_hardware(request: Request):
     with _lock:
         status = _cache["status"]
         peaks  = _cache["peaks"]
@@ -473,6 +482,7 @@ def api_hardware():
 
 
 @app.post("/api/autonomous")
+@limiter.limit("10/minute")
 async def api_autonomous(request: Request):
     _require_auth(request)
     global _autonomous_enabled, _auto_engage, _threat_threshold
@@ -489,6 +499,7 @@ async def api_autonomous(request: Request):
             "auto_engage": _auto_engage, "threat_threshold": _threat_threshold}
 
 @app.post("/api/control")
+@limiter.limit("10/minute")
 async def api_control(request: Request):
     _require_auth(request)
     global _system_active, _system_mode
@@ -511,4 +522,10 @@ async def api_audit(request: Request):
 # ── Entrypoint ────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000,
+        ssl_certfile="/home/chaostech-26/nsd-prototype/nsd_cert.pem",
+        ssl_keyfile="/home/chaostech-26/nsd-prototype/nsd_key.pem",
+    )
