@@ -201,6 +201,69 @@ def _score_threat(freq_mhz, power_db, band, t_type, swarm_member, threat_id):
     total = min(100, band_score + power_score + swarm_score + persist_score)
     return total
 
+
+def _build_threat_list(peaks, noise):
+    """Run full threat pipeline. MUST be called with _lock held."""
+    global _threats_engaged, _threats_neutralized, _autonomous_actions, _threat_states
+    import math, random
+    TYPE_ICONS = {
+        "DRONE_CTRL": "DRONE_CTRL", "LTE_SIGNAL": "LTE_SIG",
+        "AIRCRAFT": "ADS-B", "WIFI_DJI": "WIFI/DJI", "RF_PEAK": "RF_PEAK",
+    }
+    peaks = _false_positive_filter(peaks, noise)
+    threats = []
+    for pk in peaks:
+        freq_mhz = pk["freq_mhz"]
+        power_db = pk["power_db"]
+        t_type   = pk.get("type", "RF_PEAK")
+        bw_hz    = pk.get("bandwidth_hz", 0)
+        band_lbl = pk.get("band", "UNK")
+        protocol, confidence, description = band_lbl, 75, "RF signal detected"
+        threat_id = _assign_threat_id(freq_mhz)
+        threats.append({
+            "id": threat_id, "freq": round(freq_mhz / 1000, 4),
+            "freq_mhz": freq_mhz, "power": round(power_db, 1),
+            "power_db": power_db,
+            "range":    round(0.3 + (threat_id * 0.618033) % 2.0, 2),
+            "bearing":  round((freq_mhz * 137.508 + threat_id * 23.7) % 360, 1),
+            "angle":    round((freq_mhz * 137.508 + threat_id * 23.7) % 360, 1),
+            "distance": round(0.3 + (threat_id * 0.618033) % 2.0, 2),
+            "speed":    round(10 + (threat_id * 3.7) % 20, 1),
+            "altitude": round(50 + (threat_id * 17.3) % 200),
+            "type": TYPE_ICONS.get(t_type, t_type),
+            "protocol": protocol, "confidence": confidence,
+            "description": description, "bandwidth_hz": bw_hz,
+            "band": band_lbl, "status": "ACTIVE",
+            "first_seen": _threat_tracker.get(round(freq_mhz, 3), {}).get("first_seen", time.time()),
+            "threat_score": _score_threat(freq_mhz, power_db, band_lbl, t_type, False, threat_id),
+        })
+    for _t in threats: _t.setdefault("swarm_member", False)
+    _, threats = _detect_swarms(threats)
+    _expire_stale_threats([pk["freq_mhz"] for pk in peaks])
+    for _t in threats:
+        _t["threat_score"] = _score_threat(
+            _t["freq_mhz"], _t["power_db"], _t.get("band", ""),
+            _t["type"], _t.get("swarm_member", False), _t["id"])
+    now = time.time()
+    for t in threats:
+        tid   = t["id"]
+        state = _threat_states.get(tid, "DETECTED")
+        age   = now - t.get("first_seen", now)
+        if state == "DETECTED" and _system_active and age > 4:
+            _threat_states[tid] = "ENGAGED"
+            _threats_engaged += 1
+            if _auto_engage and _autonomous_enabled:
+                _autonomous_actions += 1
+        elif state == "ENGAGED" and age > 10:
+            _threat_states[tid] = "NEUTRALIZED"
+            _threats_neutralized += 1
+        t["state"] = _threat_states.get(tid, "DETECTED")
+    active_ids = {t["id"] for t in threats}
+    for tid in list(_threat_states.keys()):
+        if tid not in active_ids:
+            del _threat_states[tid]
+    return threats
+
 def scanner_loop():
     global _band_index, _scan_center_mhz, _scan_span_mhz
 
@@ -208,10 +271,9 @@ def scanner_loop():
     all_peaks = {}  # keyed by band label
 
     while True:
-        band = BANDS[_band_index % len(BANDS)]
-        _band_index += 1
-        _scan_center_mhz = band["center_mhz"]
-        _scan_span_mhz   = band["span_mhz"]
+        with _lock:
+            _bi = _band_index % len(BANDS)
+        band = BANDS[_bi]
 
         try:
             center_hz = band["center_mhz"] * 1e6
@@ -244,16 +306,20 @@ def scanner_loop():
                 combined.extend(all_peaks.get(b["label"], []))
 
             with _lock:
-                _cache["center_mhz"]     = band["center_mhz"]
+                _band_index          += 1          # ← moved inside lock
+                _scan_center_mhz      = band["center_mhz"]
+                _scan_span_mhz        = band["span_mhz"]
+                _cache["center_mhz"]  = band["center_mhz"]
                 _cache["noise_floor_db"] = detection["noise_floor_db"]
-                _cache["points"]         = points
-                _cache["peaks"]          = combined
-                _cache["active_band"]    = band["label"]
-                _cache["timestamp"]      = time.time()
-                _cache["status"]         = "ok"
-                _cache["error"]          = None
+                _cache["points"]      = points
+                _cache["peaks"]       = combined
+                _cache["active_band"] = band["label"]
+                _cache["timestamp"]   = time.time()
+                _cache["status"]      = "ok"
+                _cache["error"]       = None
                 for _bp in band_peaks: _unique_threat_ids.add(_bp["freq_mhz"])
                 _cache["total_detected"] = len(_unique_threat_ids)
+                _cache["threats"] = _build_threat_list(combined, detection["noise_floor_db"])
 
         except LibUSBError as e:
             with _lock:
@@ -381,104 +447,33 @@ def api_psd_scan(request: Request, center_mhz: float = 1090.0, span_mhz: float =
 @limiter.limit("60/minute")
 def api_hardware(request: Request):
     with _lock:
-        status = _cache["status"]
-        peaks  = _cache["peaks"]
-        noise  = _cache["noise_floor_db"]
-        ts     = _cache["timestamp"]
-
-    peaks = _false_positive_filter(peaks, noise)
-    import math, random
-    TYPE_ICONS = {
-        "DRONE_CTRL": "DRONE_CTRL",
-        "LTE_SIGNAL": "LTE_SIG",
-        "AIRCRAFT":   "ADS-B",
-        "WIFI_DJI":   "WIFI/DJI",
-        "RF_PEAK":    "RF_PEAK",
-    }
-    threats = []
-    for pk in peaks:
-        freq_mhz  = pk["freq_mhz"]
-        power_db  = pk["power_db"]
-        t_type    = pk.get("type", "RF_PEAK")
-        bw_hz     = pk.get("bandwidth_hz", 0)
-        above_db  = pk.get("above_noise_db", 0)
-        phase     = pk.get("phase_rad", 0)
-        band_lbl  = pk.get("band", "UNK")
-        protocol, confidence, description = band_lbl, 75, "RF signal detected"  # TEMP bypass
-        threat_id = _assign_threat_id(freq_mhz)
-        threats.append({
-            "id":        threat_id,
-            "freq":      round(freq_mhz / 1000, 4),
-            "freq_mhz":  freq_mhz,
-            "power":     round(power_db, 1),
-            "power_db":  power_db,
-            "range":     round(0.3 + (threat_id * 0.618033) % 2.0, 2),
-            "bearing":   round((freq_mhz * 137.508 + threat_id * 23.7) % 360, 1),
-            "angle":     round((freq_mhz * 137.508 + threat_id * 23.7) % 360, 1),
-            "distance":  round(0.3 + (threat_id * 0.618033) % 2.0, 2),
-            "speed":     round(10 + (threat_id * 3.7) % 20, 1),
-            "altitude":  round(50 + (threat_id * 17.3) % 200),
-            "type":      TYPE_ICONS.get(t_type, t_type),
-            "protocol":    protocol,
-            "confidence":  confidence,
-            "description": description,
-            "bandwidth_hz": bw_hz,
-            "band":      pk.get("band", "UNK"),
-            "status":    "ACTIVE",
-            "first_seen": _threat_tracker.get(round(freq_mhz, 3), {}).get("first_seen", time.time()),
-            "threat_score": _score_threat(freq_mhz, power_db, pk.get("band",""), t_type, False, threat_id),
-        })
-
-    for _t in threats: _t.setdefault("swarm_member", False)
-    swarm_groups, threats = _detect_swarms(threats)
-    _expire_stale_threats([pk["freq_mhz"] for pk in peaks])
-
-    # Recalculate threat_score with accurate swarm_member flag
-    for _t in threats:
-        _t["threat_score"] = _score_threat(
-            _t["freq_mhz"], _t["power_db"], _t.get("band",""),
-            _t["type"], _t.get("swarm_member", False), _t["id"]
-        )
-
-    global _threats_engaged, _threats_neutralized, _autonomous_actions, _threat_states
-    # ── Threat State Machine ─────────────────────────────────
-    now = time.time()
-    for t in threats:
-        tid = t["id"]
-        state = _threat_states.get(tid, "DETECTED")
-        age   = now - t.get("first_seen", now)
-
-        if state == "DETECTED" and _system_active and age > 4:
-            _threat_states[tid] = "ENGAGED"
-            _threats_engaged += 1
-            if _auto_engage and _autonomous_enabled:
-                _autonomous_actions += 1
-        elif state == "ENGAGED" and age > 10:
-            _threat_states[tid] = "NEUTRALIZED"
-            _threats_neutralized += 1
-
-        t["state"] = _threat_states.get(tid, "DETECTED")
-
-    # Clean up states for expired threats
-    active_ids = {t["id"] for t in threats}
-    for tid in list(_threat_states.keys()):
-        if tid not in active_ids:
-            del _threat_states[tid]
-
-    uptime_sec = int(time.time() - _start_time)
-    return {
-        "status":         status,
-        "mission_state":  {"uptime_sec": uptime_sec, "threats_detected": _cache.get("total_detected", len(threats)), "swarms_detected": _swarms_detected, "active_swarms": len(_active_swarms), "threats_engaged": _threats_engaged, "threats_neutralized": _threats_neutralized, "autonomous_actions": _autonomous_actions, "swarms_eliminated": _swarms_eliminated},
-
-        "threats":        threats,
-        "threat_count":   len(threats),
-        "noise_floor_db": noise,
-        "system_state":   {"active": _system_active, "mode": _system_mode, "power_level": 100, "energy_reserves": 100},
-        "autonomous_mode": {"enabled": _autonomous_enabled, "auto_engage": _auto_engage, "threat_threshold": _threat_threshold},
-        "active_band":    _cache.get("active_band", "UNK"),
-        "timestamp":      ts,
-    }
-
+        status  = _cache["status"]
+        ts      = _cache["timestamp"]
+        noise   = _cache["noise_floor_db"]
+        threats = list(_cache.get("threats", []))
+        uptime_sec = int(time.time() - _start_time)
+        return {
+            "status": status,
+            "mission_state": {
+                "uptime_sec":          uptime_sec,
+                "threats_detected":    _cache.get("total_detected", len(threats)),
+                "swarms_detected":     _swarms_detected,
+                "active_swarms":       len(_active_swarms),
+                "threats_engaged":     _threats_engaged,
+                "threats_neutralized": _threats_neutralized,
+                "autonomous_actions":  _autonomous_actions,
+                "swarms_eliminated":   _swarms_eliminated,
+            },
+            "threats":        threats,
+            "threat_count":   len(threats),
+            "noise_floor_db": noise,
+            "system_state":   {"active": _system_active, "mode": _system_mode,
+                               "power_level": 100, "energy_reserves": 100},
+            "autonomous_mode": {"enabled": _autonomous_enabled, "auto_engage": _auto_engage,
+                                "threat_threshold": _threat_threshold},
+            "active_band":    _cache.get("active_band", "UNK"),
+            "timestamp":      ts,
+        }
 
 
 @app.post("/api/autonomous")
