@@ -138,13 +138,16 @@ input[type=range] { width:100%; accent-color:#00ff41; margin-top:3px; }
   </div>
 </div>
 <script>
-var API_BASE = window.location.origin;  // 8000
-var RF_BASE  = window.location.origin;
+var API_BASE = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+  ? 'http://localhost:8000'
+  : 'https://nsd.chaostechdefensellc.com';
+      var RF_BASE  = 'http://localhost:8000';
+var RF_Base = 'http://localhost:8000';
 var _prevBand = null;
 var threats = [], systemState = {}, missionState = {}, autonomousMode = {}, rfSpectrum = {};
 var NSD_TOKEN = "";
 // Fetch token from local API on load — never hardcoded
-fetch('https://nsd.chaostechdefensellc.com/api/token')
+fetch('http://localhost:8000/api/token')
   .then(function(r){ return r.json(); })
   .then(function(d){ NSD_TOKEN = d.token || ""; })
   .catch(function(){ console.warn('Token fetch failed — POST endpoints will reject'); });
@@ -583,5 +586,311 @@ setInterval(fetchData, 2000);
   // immediate call on load — mirrors fetchRF pattern
   // immediate call on load — mirrors fetchRF pattern
 </script>
+
+<script>
+// ── NSD v19 Live Spectrum Analyzer ──────────────────────────
+const SPECTRUM_API = "https://nsd.chaostechdefensellc.com/api/spectrum";
+const specCanvas = document.getElementById("rfCanvas");
+const specCtx = specCanvas ? specCanvas.getContext("2d") : null;
+
+// ── NSD v19 Peak Markers ───────────────────────────────
+
+
+function drawSpectrumWithPeaks(dbValues, centerMhz, spanMhz) {
+    if (!specCanvas || !specCtx) return;
+    const W = specCanvas.width;
+    const H = specCanvas.height;
+    const len = dbValues.length;
+    if (!len) return;
+    let minDb = Math.min(...dbValues);
+    let maxDb = Math.max(...dbValues);
+    specCtx.clearRect(0, 0, W, H);
+
+    // Grid
+    specCtx.strokeStyle = "rgba(0,255,102,0.2)";
+    specCtx.lineWidth = 1;
+    specCtx.beginPath();
+    for (let d = -100; d <= -60; d += 10) {
+        const y = H * (1 - (d - minDb) / (maxDb - minDb));
+        specCtx.moveTo(0, y);
+        specCtx.lineTo(W, y);
+    }
+    specCtx.stroke();
+
+    // Waveform fill
+    specCtx.beginPath();
+    for (let i = 0; i < len; i++) {
+        const x = (i / (len - 1)) * W;
+        const norm = (dbValues[i] - minDb) / (maxDb - minDb + 1e-6);
+        const y = H - norm * H;
+        if (i === 0) specCtx.moveTo(x, y);
+        else specCtx.lineTo(x, y);
+    }
+    specCtx.lineTo(W, H);
+    specCtx.lineTo(0, H);
+    specCtx.closePath();
+    specCtx.fillStyle = "rgba(0,255,102,0.6)";
+    specCtx.fill();
+
+    // Peaks (threshold -12dB)
+    const threshold = maxDb - 12;
+    const peaks = [];
+    for (let i = 1; i < len - 1; i++) {
+        const v = dbValues[i];
+        if (v > threshold && v >= dbValues[i-1] && v >= dbValues[i+1]) {
+            peaks.push({ idx: i, val: v });
+        }
+    }
+
+    // Draw brighter markers
+    specCtx.fillStyle = "#ffff00";
+    specCtx.strokeStyle = "#ffaa00";
+    specCtx.font = "bold 11px monospace";
+    specCtx.shadowColor = "#ffff00";
+    specCtx.shadowBlur = 4;
+
+    const startMhz = centerMhz - spanMhz / 2;
+    const hzPerBin = spanMhz / Math.max(len - 1, 1);
+
+    peaks.forEach(p => {
+        const x = (p.idx / (len - 1)) * W;
+        const norm = (p.val - minDb) / (maxDb - minDb + 1e-6);
+        const y = H - norm * H;
+
+        // Big triangle
+        specCtx.beginPath();
+        specCtx.moveTo(x, y - 10);
+        specCtx.lineTo(x - 8, y + 2);
+        specCtx.lineTo(x + 8, y + 2);
+        specCtx.closePath();
+        specCtx.fill();
+        specCtx.stroke();
+
+        // Freq label
+        const f = startMhz + p.idx * hzPerBin;
+        const label = f.toFixed(1) + "M";
+        specCtx.fillText(label, Math.max(x - 25, 5), y - 15);
+    });
+}
+(dbValues, centerMhz, spanMhz) {
+    if (!specCanvas || !specCtx) return;
+    const W = specCanvas.width;
+    const H = specCanvas.height;
+    const len = dbValues.length;
+    if (!len) return;
+    let minDb = Math.min(...dbValues);
+    let maxDb = Math.max(...dbValues);
+    specCtx.clearRect(0, 0, W, H);
+
+    // Grid
+    specCtx.strokeStyle = "rgba(0,255,102,0.2)";
+    specCtx.lineWidth = 1;
+    specCtx.beginPath();
+    for (let d = -100; d <= -60; d += 10) {
+        const y = H * (1 - (d - minDb) / (maxDb - minDb));
+        specCtx.moveTo(0, y);
+        specCtx.lineTo(W, y);
+    }
+    specCtx.stroke();
+
+    // Waveform fill
+    specCtx.beginPath();
+    for (let i = 0; i < len; i++) {
+        const x = (i / (len - 1)) * W;
+        const norm = (dbValues[i] - minDb) / (maxDb - minDb + 1e-6);
+        const y = H - norm * H;
+        if (i === 0) specCtx.moveTo(x, y);
+        else specCtx.lineTo(x, y);
+    }
+    specCtx.lineTo(W, H);
+    specCtx.lineTo(0, H);
+    specCtx.closePath();
+    specCtx.fillStyle = "rgba(0,255,102,0.6)";
+    specCtx.fill();
+
+    // Peaks (threshold -12dB)
+    const threshold = maxDb - 12;
+    const peaks = [];
+    for (let i = 1; i < len - 1; i++) {
+        const v = dbValues[i];
+        if (v > threshold && v >= dbValues[i-1] && v >= dbValues[i+1]) {
+            peaks.push({ idx: i, val: v });
+        }
+    }
+
+    // Draw brighter markers
+    specCtx.fillStyle = "#ffff00";
+    specCtx.strokeStyle = "#ffaa00";
+    specCtx.font = "bold 11px monospace";
+    specCtx.shadowColor = "#ffff00";
+    specCtx.shadowBlur = 4;
+
+    const startMhz = centerMhz - spanMhz / 2;
+    const hzPerBin = spanMhz / Math.max(len - 1, 1);
+
+    peaks.forEach(p => {
+        const x = (p.idx / (len - 1)) * W;
+        const norm = (p.val - minDb) / (maxDb - minDb + 1e-6);
+        const y = H - norm * H;
+
+        // Big triangle
+        specCtx.beginPath();
+        specCtx.moveTo(x, y - 10);
+        specCtx.lineTo(x - 8, y + 2);
+        specCtx.lineTo(x + 8, y + 2);
+        specCtx.closePath();
+        specCtx.fill();
+        specCtx.stroke();
+
+        // Freq label
+        const f = startMhz + p.idx * hzPerBin;
+        const label = f.toFixed(1) + "M";
+        specCtx.fillText(label, Math.max(x - 25, 5), y - 15);
+    });
+}
+(dbValues, centerMhz, spanMhz) {
+    if (!specCanvas || !specCtx) return;
+
+    const W = specCanvas.width;
+    const H = specCanvas.height;
+    const len = dbValues.length;
+    if (!len) return;
+
+    let minDb = Math.min(...dbValues);
+    let maxDb = Math.max(...dbValues);
+
+    specCtx.clearRect(0, 0, W, H);
+
+    // Baseline fill
+    specCtx.beginPath();
+    for (let i = 0; i < len; i++) {
+        const x = (i / (len - 1)) * W;
+        const norm = (dbValues[i] - minDb) / (maxDb - minDb + 1e-6);
+        const y = H - norm * H;
+        if (i === 0) specCtx.moveTo(x, y);
+        else specCtx.lineTo(x, y);
+    }
+    specCtx.lineTo(W, H);
+    specCtx.lineTo(0, H);
+    specCtx.closePath();
+    specCtx.fillStyle = "#00ff66";
+    specCtx.fill();
+
+    // Peak detection
+    const threshold = maxDb - 12;  // Lowered for quieter environments  // ~6 dB below strongest signal
+    const peaks = [];
+    for (let i = 1; i < len - 1; i++) {
+        const v = dbValues[i];
+        if (v > threshold && v >= dbValues[i-1] && v >= dbValues[i+1]) {
+            peaks.push({ idx: i, val: v });
+        }
+    }
+
+    // Draw markers
+    specCtx.fillStyle = "#ffcc00";
+    specCtx.strokeStyle = "#ffcc00";
+    specCtx.font = "10px monospace";
+
+    const startMhz = centerMhz - spanMhz / 2;
+    const hzPerBin = spanMhz / Math.max(len - 1, 1);
+
+    peaks.forEach(p => {
+        const x = (p.idx / (len - 1)) * W;
+        const norm = (p.val - minDb) / (maxDb - minDb + 1e-6);
+        const y = H - norm * H;
+
+        // Triangle marker
+        specCtx.beginPath();
+        specCtx.moveTo(x, y - 6);
+        specCtx.lineTo(x - 4, y);
+        specCtx.lineTo(x + 4, y);
+        specCtx.closePath();
+        specCtx.fill();
+
+        // Frequency label
+        const f = startMhz + p.idx * hzPerBin;
+        const label = f.toFixed(2) + " MHz";
+        specCtx.fillText(label, Math.min(Math.max(x - 20, 0), W - 60), y - 10);
+    });
+}
+
+
+async function fetchSpectrum() {
+    if (!specCtx) return;
+    try {
+        const resp = await fetch(SPECTRUM_API);
+        const data = await resp.json();
+
+        if (!data.spectrum_db || data.spectrum_db.length === 0) return;
+        drawSpectrumWithPeaks(data.spectrum_db, data.center_freq_mhz, data.span_mhz);
+    } catch(e) {}
+}
+
+function drawSpectrum(dbValues, centerMhz, spanMhz) {
+    const W = specCanvas.width;
+    const H = specCanvas.height;
+    const minDb = -120, maxDb = -60;
+    
+    // Background
+    specCtx.fillStyle = "#0a0f1a";
+    specCtx.fillRect(0, 0, W, H);
+    
+    // Grid lines
+    specCtx.strokeStyle = "rgba(0,255,100,0.1)";
+    specCtx.lineWidth = 1;
+    for (let i = 0; i <= 6; i++) {
+        const y = (i / 6) * H;
+        specCtx.beginPath();
+        specCtx.moveTo(0, y); specCtx.lineTo(W, y);
+        specCtx.stroke();
+        const dbLabel = Math.round(maxDb - ((maxDb - minDb) * i / 6));
+        specCtx.fillStyle = "rgba(0,255,100,0.5)";
+        specCtx.font = "10px monospace";
+        specCtx.fillText(dbLabel + "dB", 2, y - 2);
+    }
+    
+    // Frequency labels
+    const startMhz = centerMhz - spanMhz / 2;
+    const endMhz = centerMhz + spanMhz / 2;
+    specCtx.fillStyle = "rgba(0,255,100,0.5)";
+    specCtx.font = "10px monospace";
+    specCtx.fillText(startMhz.toFixed(2) + "MHz", 2, H - 4);
+    specCtx.fillText(centerMhz.toFixed(2) + "MHz", W/2 - 25, H - 4);
+    specCtx.fillText(endMhz.toFixed(2) + "MHz", W - 70, H - 4);
+    
+    // Spectrum fill
+    const grad = specCtx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, "rgba(255,50,50,0.9)");
+    grad.addColorStop(0.4, "rgba(0,255,100,0.7)");
+    grad.addColorStop(1, "rgba(0,255,100,0.1)");
+    specCtx.fillStyle = grad;
+    specCtx.beginPath();
+    specCtx.moveTo(0, H);
+    dbValues.forEach((db, i) => {
+        const x = (i / dbValues.length) * W;
+        const y = H - ((Math.min(Math.max(db, minDb), maxDb) - minDb) / (maxDb - minDb)) * H;
+        i === 0 ? specCtx.moveTo(x, y) : specCtx.lineTo(x, y);
+    });
+    specCtx.lineTo(W, H);
+    specCtx.closePath();
+    specCtx.fill();
+    
+    // Spectrum line
+    specCtx.strokeStyle = "#00ff64";
+    specCtx.lineWidth = 1.5;
+    specCtx.beginPath();
+    dbValues.forEach((db, i) => {
+        const x = (i / dbValues.length) * W;
+        const y = H - ((Math.min(Math.max(db, minDb), maxDb) - minDb) / (maxDb - minDb)) * H;
+        i === 0 ? specCtx.moveTo(x, y) : specCtx.lineTo(x, y);
+    });
+    specCtx.stroke();
+}
+
+// Poll every 200ms for smooth animation
+setInterval(fetchSpectrum, 200);
+fetchSpectrum();
+</script>
+
 </body>
 </html>
