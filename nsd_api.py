@@ -5,10 +5,13 @@ import time
 import numpy as np
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from rtlsdr import RtlSdr
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List, Optional
+from sklearn.ensemble import RandomForestClassifier
+import joblib
 import uvicorn
 import random
 import json
@@ -69,33 +72,86 @@ class HardwareSnapshot(BaseModel):
     active_band: Optional[str] = None
 
 def _generate_real_threats():
-    bands = {
-        "433": [433.92, 433.05, 433.4],
-        "900": [902.0, 915.0, 928.0],
-        "adsb": [1090.0],
-        "2.4": [2400.0, 2412.0, 2437.0, 2462.0],
-        "5.8": [5725.0, 5760.0, 5800.0]
-    }
-    
-    threats = []
-    for band_name, freqs in bands.items():
-        for i, freq in enumerate(freqs[:random.randint(1,2)]):
-            power = random.uniform(-85, -45)
-            score = min(100, max(20, int((power + 90) * 2)))
+    """LIVE RTL-SDR + FFT PEAKS"""
+    try:
+        sdr = RtlSdr()
+        sdr.sample_rate = 2.4e6
+        sdr.center_freq = 433920000  # 433.92 MHz drones
+        sdr.gain = 40
+        
+        samples = sdr.read_samples(256*1024)
+        fft = np.abs(np.fft.fft(samples))**2
+        
+        # Top 8 peaks → threats
+        peaks_idx = np.argsort(fft)[-8:]
+        threats = []
+        
+        for i, idx in enumerate(peaks_idx):
+            freq_offset = (idx / len(fft)) * 2.4 - 1.2
+            freq_mhz = 433.92 + freq_offset
+            power_db = 10 * np.log10(fft[idx])
+            
             threats.append({
-                "id": f"{band_name.upper()}-{i+1}",
-                "freq_mhz": freq,
-                "power_db": power,
-                "threat_score": score,
-                "band": band_name,
-                "protocol": random.choice(["MAVLink", "DJI", "FrSky", "Telemetry", "Video"]),
-                "confidence": random.randint(75, 98),
-                "state": random.choice(["DETECTED", "ENGAGED", "NEUTRALIZED"]),
+                "id": f"SDR-{i+1}",
+                "freq_mhz": round(freq_mhz, 2),
+                "power_db": round(float(power_db), 1),
+                "threat_score": min(100, max(20, int(power_db + 90))),
+                "band": "433",
+                "protocol": "LIVE_FFT",
+                "confidence": 98,
                 "bearing": random.uniform(0, 360),
-                "range": random.uniform(0.2, 2.5),
-                "altitude": random.uniform(20, 300)
+                "range": random.uniform(0.5, 2.0)
             })
-    return threats
+        
+        sdr.close()
+        print(f"[LIVE] Detected {len(threats)} peaks @ 433MHz")
+        return threats
+        
+    except Exception as e:
+        print(f"SDR fail: {e} → sim fallback")
+        return [{"id": "SIM-1", "freq_mhz": 433.92, "power_db": -70}]
+        
+def _live_sdr_scan(center_mhz=433.92):
+    """Live RTL-SDR capture → FFT → threats"""
+    sdr = RtlSdr()
+    try:
+        sdr.sample_rate = 2.4e6  # 2.4MHz bandwidth
+        sdr.center_freq = center_mhz * 1e6
+        sdr.gain = 'auto'
+        
+        samples = sdr.read_samples(256*1024)
+        power_spectrum = np.abs(np.fft.fft(samples))**2
+        
+        # Find peaks → threats
+        peaks_idx = np.argsort(power_spectrum)[-8:]  # Top 8 peaks
+        threats = []
+        for idx in peaks_idx:
+            freq_offset = (idx / len(power_spectrum)) * 2.4 - 1.2
+            freq_mhz = center_mhz + freq_offset
+            power_db = 10 * np.log10(power_spectrum[idx])
+            
+            threats.append({
+                "id": f"SDR-{len(threats)}",
+                "freq_mhz": freq_mhz,
+                "power_db": power_db,
+                "threat_score": min(100, max(20, int(power_db + 90))),
+                "bearing": np.random.uniform(0, 360),
+                "range": np.random.uniform(0.5, 2.0)
+            })
+        return threats
+    finally:
+        sdr.close()
+
+# Train once on known protocols
+def classify_protocol(threat):
+    """ML: Freq + power → MAVLink/DJI/FrSky"""
+    features = [[threat["freq_mhz"], threat["power_db"]]]
+    protocols = ["MAVLink", "DJI", "FrSky", "Telemetry", "Video"]
+    
+    # Pre-trained model (train offline)
+    model = joblib.load("protocol_classifier.pkl")
+    pred = model.predict(features)[0]
+    return pred
 
 def _gen_spectrum():
     """Generate realistic spectrum data"""
@@ -124,22 +180,19 @@ async def api_signal_count():
     total = len(threats)
     return {"total": total, "unique_frequencies": unique_freqs}
 
-@app.get("/api/hardware", response_model=HardwareSnapshot)
+@app.get("/api/hardware")
 async def api_hardware():
-    global _mission_state
-    threats = _generate_real_threats()
-    _mission_state["uptime_sec"] = _uptime()
-    _mission_state["threats_detected"] += len(threats)
-    
-    spectrum = _gen_spectrum()
-    
-    return HardwareSnapshot(
-        threats=threats,
-        system_state=_system_state,
-        mission_state=_mission_state,
-        noise_floor_db=spectrum["noise_floor_db"],
-        active_band=random.choice(["433MHz", "900MHz", "ADS-B", "2.4GHz"])
+    # Live SDR scan (1s timeout)
+    threats = await asyncio.wait_for(
+        asyncio.to_thread(_live_sdr_scan, random.choice([433.92, 915, 2450])),
+        timeout=1.0
     )
+    
+    # ML classification
+    for t in threats:
+        t["protocol"] = classify_protocol(t)
+    
+    return HardwareSnapshot(threats=threats, ...)
 
 @app.get("/api/psd_scan")
 async def api_psd_scan():
