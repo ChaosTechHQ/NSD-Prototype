@@ -34,6 +34,27 @@ input[type=range] { width:100%; accent-color:#00ff41; margin-top:3px; }
 .threat-card { background:#001500; border:1px solid #003300; border-left:3px solid #00ff41; padding:5px 7px; margin:3px 0; font-size:10px; }
 .threat-card.hi { border-left-color:#ff4444; }
 .threat-card.md { border-left-color:#ffaa00; }
+@keyframes swarmPulse {
+  0%,100% { opacity:1; color:#ff0000; text-shadow:0 0 20px #ff0000; }
+  50%      { opacity:0.3; }
+}
+#swarmAlert {
+  display:none; position:absolute; top:12px; left:50%;
+  transform:translateX(-50%);
+  color:#ff0000; font-family:monospace; font-size:13px; font-weight:bold;
+  letter-spacing:3px; animation:swarmPulse 0.6s infinite;
+  z-index:999; pointer-events:none;
+  text-shadow:0 0 15px #ff0000;
+}
+.threat-card.swarm { border-left-color:#ff0000; background:#1a0000; }
+
+@keyframes bandFlash {
+  0%   { color:#00ff41; text-shadow:0 0 6px #00ff41; }
+  35%  { color:#ffffff; text-shadow:0 0 20px #fff; }
+  100% { color:#00ff41; text-shadow:0 0 6px #00ff41; }
+}
+.band-switching { animation: bandFlash 0.5s ease 3; }
+
 .t-hdr { display:flex; justify-content:space-between; margin-bottom:2px; }
 .t-id { color:#00ff41; font-weight:bold; }
 .t-score { padding:1px 5px; border-radius:2px; font-weight:bold; }
@@ -65,7 +86,7 @@ input[type=range] { width:100%; accent-color:#00ff41; margin-top:3px; }
       <div class="panel">
         <div class="panel-title">&#9675; MISSION INTELLIGENCE</div>
         <div class="row"><span class="lbl">Uptime:</span><span class="val" id="uptime">0:00:00</span></div>
-        <div class="row"><span class="lbl">Threats Detected:</span><span class="val" id="mTD">0</span></div>
+        <div class="row"><span class="lbl">Unique RF Sources:</span><span class="val" id="mTD">0</span></div>
         <div class="row"><span class="lbl">Threats Engaged:</span><span class="val" id="mTE">0</span></div>
         <div class="row"><span class="lbl">Threats Neutralized:</span><span class="val" id="mTN">0</span></div>
         <div class="row"><span class="lbl">Swarms Detected:</span><span class="val" id="mSD">0</span></div>
@@ -74,7 +95,7 @@ input[type=range] { width:100%; accent-color:#00ff41; margin-top:3px; }
       </div>
      <div class="panel">
        <div class="panel-title">&#9675; RF SPECTRUM ANALYSIS</div>
-       <canvas id="rfCanvas" width="320" height="120" style="width:100%;height:120px;background:#000a00;display:block;margin-bottom:6px;"></canvas>
+       <canvas id="rfCanvas" style="width:100%;height:130px;background:#000a00;display:block;margin-bottom:6px;"></canvas>
        <div class="rf-row"><span class="rf-lbl">0.43 GHz:</span><div class="rf-bg"><div class="rf-fill" id="rfb1" style="width:0%"></div></div><span class="rf-n" id="rfc1">0</span></div>
        <div class="rf-row"><span class="rf-lbl">0.90 GHz:</span><div class="rf-bg"><div class="rf-fill" id="rfb2" style="width:0%"></div></div><span class="rf-n" id="rfc2">0</span></div>
        <div class="rf-row"><span class="rf-lbl">2.40 GHz:</span><div class="rf-bg"><div class="rf-fill" id="rfb3" style="width:0%"></div></div><span class="rf-n" id="rfc3">0</span></div>
@@ -107,7 +128,7 @@ input[type=range] { width:100%; accent-color:#00ff41; margin-top:3px; }
       <div class="ai-row"><input type="checkbox" id="aiEn" onchange="updateAutonomous()"><label for="aiEn">Enable Autonomous Mode</label></div>
       <div class="ai-row"><input type="checkbox" id="aiAuto" onchange="updateAutonomous()"><label for="aiAuto">Auto-Engage Threats</label></div>
       <div style="font-size:11px;color:#007700;">Threat Threshold: <span id="thrVal">70</span></div>
-      <input type="range" id="thrSlider" min="0" max="100" value="70" oninput="updateAutonomous()">
+      <input type="range" id="thrSlider" min="0" max="100" value="70" oninput="updateAutonomous(); document.getElementById('thrLabel').textContent=this.value;"><span id="thrLabel" style="color:#00ff41;margin-left:6px;font-size:11px;">70</span>
     </div>
     <div class="sec" style="flex:1;overflow:hidden;display:flex;flex-direction:column;">
       <div class="sec-title">ACTIVE THREATS (<span id="tCount">0</span>) <span id="activeBand" style="color:#00ff41;font-size:10px;margin-left:8px;">◉ SCANNING...</span></div>
@@ -117,10 +138,14 @@ input[type=range] { width:100%; accent-color:#00ff41; margin-top:3px; }
   </div>
 </div>
 <script>
-var API_BASE = 'http://localhost:8000';
-      var RF_BASE  = 'http://localhost:8000';
-var RF_Base = 'http://localhost:8000';
+var API_BASE = 'https://localhost:8000';
+      var RF_BASE  = 'https://localhost:8000';
+var RF_Base = 'https://localhost:8000';
+var _prevBand = null;
 var threats = [], systemState = {}, missionState = {}, autonomousMode = {}, rfSpectrum = {};
+var NSD_TOKEN = "NSD-CHAOSTECH-2026";
+var noiseFloorDb = null, activeBandName = "";
+var _autonomousDirty = 0;  // timestamp of last user interaction
 var systemActive = false, currentMode = 'RF_JAM';
 
 var canvas = document.getElementById('radar');
@@ -169,7 +194,8 @@ function drawRadar() {
     var px = cx+Math.sin(a)*pr, py = cy-Math.cos(a)*pr;
     var sc = t.threat_score||50;
     var BAND_COLORS = {'433MHz':'#FFD700','900MHz':'#FF4444','ADS-B':'#00FF41','2.4GHz':'#00BFFF','UNK':'#FFA500'};
-    var col = BAND_COLORS[t.band] || (sc>70?'#ff4444':sc>40?'#ffaa00':'#00ff41');
+    var STATE_COLORS = {'NEUTRALIZED':'#ff0000','ENGAGED':'#ffaa00','DETECTED':'#00ff41'};
+    var col = STATE_COLORS[t.state] || BAND_COLORS[t.band] || (sc>70?'#ff4444':sc>40?'#ffaa00':'#00ff41');
     ctx.beginPath(); ctx.arc(px,py,9,0,Math.PI*2);
     ctx.strokeStyle=col; ctx.lineWidth=0.5; ctx.stroke();
     ctx.beginPath(); ctx.arc(px,py,5,0,Math.PI*2);
@@ -187,75 +213,118 @@ let rfFetching = false;
 function drawSpectrum(freqs, powers, peaks) {
   var canvas = document.getElementById('rfCanvas');
   if (!canvas) return;
+
+  // HiDPI sharp rendering
+  var rect  = canvas.getBoundingClientRect();
+  var dpr   = window.devicePixelRatio || 1;
+  var W     = Math.floor(rect.width  * dpr);
+  var H     = Math.floor(rect.height * dpr);
+  if (canvas.width !== W || canvas.height !== H) {
+    canvas.width  = W;
+    canvas.height = H;
+  }
   var ctx = canvas.getContext('2d');
-  var W = canvas.width, H = canvas.height;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  var CW = rect.width, CH = rect.height;
 
-  ctx.clearRect(0, 0, W, H);
+  ctx.clearRect(0, 0, CW, CH);
   ctx.fillStyle = '#000d00';
-  ctx.fillRect(0, 0, W, H);
-  if (freqs.length === 0) return;
+  ctx.fillRect(0, 0, CW, CH);
+  if (!freqs || freqs.length === 0) return;
 
-  var pad = {l:38, r:10, t:8, b:18};
-  var gW = W - pad.l - pad.r;
-  var gH = H - pad.t - pad.b;
-
+  var pad = {l:42, r:12, t:10, b:22};
+  var gW = CW - pad.l - pad.r;
+  var gH = CH - pad.t - pad.b;
   var minFreq = freqs[0], maxFreq = freqs[freqs.length-1];
 
-  // Smooth powers with 5-point moving average
-  var sm = powers.slice();
-  for (var i = 2; i < powers.length-2; i++) {
-    sm[i] = (powers[i-2]+powers[i-1]+powers[i]+powers[i+1]+powers[i+2]) / 5;
-  }
+  // Downsample to max 512 points for clean rendering
+  var step = Math.max(1, Math.floor(freqs.length / 512));
+  var sf = [], sp = [];
+  for (var i = 0; i < freqs.length; i += step) { sf.push(freqs[i]); sp.push(powers[i]); }
 
-  // Dynamic range: noise floor anchor + headroom
-  var sorted = sm.slice().sort(function(a,b){return a-b;});
-  var noiseFloor = sorted[Math.floor(sorted.length*0.15)];
-  var maxPow = sorted[sorted.length-1];
-  var dynRange = Math.max(maxPow - noiseFloor, 20);
-  var dispMin = noiseFloor - 5;
-  var dispMax = noiseFloor + dynRange + 8;
+  // 5-point smoothing
+  var sm = sp.slice();
+  for (var i = 2; i < sp.length-2; i++)
+    sm[i] = (sp[i-2]+sp[i-1]+sp[i]+sp[i+1]+sp[i+2]) / 5;
 
-  function toX(f) { return pad.l + ((f-minFreq)/(maxFreq-minFreq))*gW; }
-  function toY(p) { return pad.t + gH - ((p-dispMin)/(dispMax-dispMin))*gH; }
+  // Dynamic range
+  var sorted    = sm.slice().sort(function(a,b){return a-b;});
+  var noiseFloor = sorted[Math.floor(sorted.length * 0.15)];
+  var maxPow    = sorted[sorted.length - 1];
+  var dynRange  = Math.max(maxPow - noiseFloor, 20);
+  var dispMin   = noiseFloor - 3;
+  var dispMax   = noiseFloor + dynRange + 6;
 
-  // Grid lines
-  ctx.strokeStyle = 'rgba(0,120,0,0.25)';
-  ctx.lineWidth = 0.5;
+  function toX(f) { return pad.l + ((f-minFreq)/(maxFreq-minFreq||1))*gW; }
+  function toY(p) { return pad.t + gH - Math.min(gH, Math.max(0,((p-dispMin)/(dispMax-dispMin))*gH)); }
+
+  // Grid
+  ctx.strokeStyle = 'rgba(0,140,0,0.3)';
+  ctx.lineWidth   = 0.5;
   for (var g = 0; g <= 4; g++) {
     var gy = pad.t + (gH/4)*g;
-    ctx.beginPath(); ctx.moveTo(pad.l, gy); ctx.lineTo(W-pad.r, gy); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(pad.l, gy); ctx.lineTo(CW-pad.r, gy); ctx.stroke();
     var gv = dispMax - ((dispMax-dispMin)/4)*g;
-    ctx.fillStyle = 'rgba(0,180,0,0.7)';
-    ctx.font = '8px Courier New';
+    ctx.fillStyle = 'rgba(0,200,0,0.8)';
+    ctx.font = 'bold 9px Courier New';
     ctx.textAlign = 'right';
-    ctx.fillText(gv.toFixed(0)+'dB', pad.l-3, gy+3);
+    ctx.fillText(gv.toFixed(0)+'dB', pad.l-4, gy+3);
   }
 
-  // Noise floor baseline
+  // Freq labels (3 evenly spaced)
+  ctx.fillStyle = 'rgba(0,200,0,0.7)';
+  ctx.font = '8px Courier New';
+  ctx.textAlign = 'center';
+  for (var lx = 0; lx <= 2; lx++) {
+    var lf = minFreq + (maxFreq - minFreq) * lx / 2;
+    ctx.fillText(lf.toFixed(1), pad.l + gW * lx / 2, CH - 4);
+  }
+
+  // Noise floor dashed line
   var nfY = toY(noiseFloor);
-  ctx.strokeStyle = 'rgba(255,200,0,0.35)';
+  ctx.strokeStyle = 'rgba(255,200,0,0.5)';
   ctx.lineWidth = 1;
-  ctx.setLineDash([4,4]);
-  ctx.beginPath(); ctx.moveTo(pad.l, nfY); ctx.lineTo(W-pad.r, nfY); ctx.stroke();
+  ctx.setLineDash([3,3]);
+  ctx.beginPath(); ctx.moveTo(pad.l, nfY); ctx.lineTo(CW-pad.r, nfY); ctx.stroke();
   ctx.setLineDash([]);
 
-  // Filled spectrum
+  // Spectrum fill
   ctx.beginPath();
-  ctx.moveTo(toX(freqs[0]), toY(sm[0]));
-  for (var i = 1; i < freqs.length; i++) {
-    ctx.lineTo(toX(freqs[i]), toY(sm[i]));
-  }
+  ctx.moveTo(toX(sf[0]), toY(sm[0]));
+  for (var i = 1; i < sf.length; i++) ctx.lineTo(toX(sf[i]), toY(sm[i]));
   ctx.strokeStyle = '#00ff41';
-  ctx.lineWidth = 1.2;
+  ctx.lineWidth   = 1.5;
   ctx.stroke();
-  ctx.lineTo(toX(freqs[freqs.length-1]), H-pad.b);
-  ctx.lineTo(toX(freqs[0]), H-pad.b);
+  ctx.lineTo(toX(sf[sf.length-1]), CH-pad.b);
+  ctx.lineTo(toX(sf[0]),           CH-pad.b);
   ctx.closePath();
-  var grad = ctx.createLinearGradient(0, pad.t, 0, H-pad.b);
-  grad.addColorStop(0, 'rgba(0,255,65,0.35)');
-  grad.addColorStop(1, 'rgba(0,255,65,0.03)');
+  var grad = ctx.createLinearGradient(0, pad.t, 0, CH-pad.b);
+  grad.addColorStop(0, 'rgba(0,255,65,0.4)');
+  grad.addColorStop(1, 'rgba(0,255,65,0.02)');
   ctx.fillStyle = grad;
   ctx.fill();
+
+  // Peak markers — clean red mushrooms
+  if (peaks && peaks.length) {
+    peaks.forEach(function(pk) {
+      var px = toX(pk.freq_mhz);
+      var py = toY(pk.power_db);
+      if (px < pad.l || px > CW-pad.r) return;
+      ctx.beginPath();
+      ctx.arc(px, py, 3.5, 0, Math.PI*2);
+      ctx.fillStyle   = '#ff4444';
+      ctx.strokeStyle = '#ff0000';
+      ctx.lineWidth   = 1;
+      ctx.fill(); ctx.stroke();
+      // Stem
+      ctx.beginPath();
+      ctx.moveTo(px, py+3.5);
+      ctx.lineTo(px, CH-pad.b);
+      ctx.strokeStyle = 'rgba(255,60,60,0.25)';
+      ctx.lineWidth   = 0.8;
+      ctx.stroke();
+    });
+  }
 
   // Peak markers — circle + vertical line + freq label
   peaks.forEach(function(pk) {
@@ -309,8 +378,18 @@ function fetchData() {
         return t;
       });
       systemState = d.system_state || {};
-      noiseFloorDb = d.noise_floor_db || null;
+      noiseFloorDb = (d.noise_floor_db !== undefined && d.noise_floor_db !== null) ? d.noise_floor_db : noiseFloorDb;
       activeBandName = d.active_band || null;
+      if (activeBandName && _prevBand && activeBandName !== _prevBand) {
+        var el = document.getElementById('tCount');
+        if (el) {
+          el.classList.remove('band-switching');
+          void el.offsetWidth;
+          el.classList.add('band-switching');
+          setTimeout(function(){ el.classList.remove('band-switching'); }, 1600);
+        }
+      }
+      _prevBand = activeBandName;
       missionState = d.mission_state || {};
       autonomousMode = d.autonomous_mode || {};
       rfSpectrum = d.rf_spectrum || {};
@@ -323,9 +402,10 @@ function fetchData() {
 
 function toggleSystem() {
   systemActive = !systemActive;
+  updateUI();  // instant visual feedback
   fetch(API_BASE+'/api/control', {
     method:'POST',
-    headers:{'Content-Type':'application/json'},
+    headers:{'Content-Type':'application/json','X-NSD-Token':NSD_TOKEN},
     body:JSON.stringify({active:systemActive})
   }).catch(function(){});
   fetchData();
@@ -335,22 +415,27 @@ function setMode(mode, el) {
   currentMode = mode;
   document.querySelectorAll('.mbtn').forEach(function(b){ b.classList.remove('on'); });
   if (el) el.classList.add('on');
+  document.getElementById('sDisrupt').textContent = mode;
+  currentMode = mode;
+  document.querySelectorAll('.mbtn').forEach(function(b){ b.classList.remove('on'); });
+  if (el) el.classList.add('on');
   fetch(API_BASE+'/api/control', {
     method:'POST',
-    headers:{'Content-Type':'application/json'},
+    headers:{'Content-Type':'application/json','X-NSD-Token':NSD_TOKEN},
     body:JSON.stringify({mode:mode})
   }).catch(function(){});
   fetchData();
 }
 
 function updateAutonomous() {
+  _autonomousDirty = Date.now();
   var en = document.getElementById('aiEn').checked;
   var au = document.getElementById('aiAuto').checked;
   var th = parseInt(document.getElementById('thrSlider').value);
   document.getElementById('thrVal').textContent = th;
   fetch(API_BASE+'/api/control', {
     method:'POST',
-    headers:{'Content-Type':'application/json'},
+    headers:{'Content-Type':'application/json','X-NSD-Token':NSD_TOKEN},
     body:JSON.stringify({autonomous_enabled:en,auto_engage:au,threat_threshold:th})
   }).catch(function(){});
 }
@@ -372,18 +457,37 @@ function updateUI() {
   btn.textContent = systemActive ? 'DEACTIVATE SYSTEM' : 'ACTIVATE SYSTEM';
   btn.className = systemActive ? 'btn btn-active' : 'btn';
   if (autonomousMode.enabled !== undefined) {
-    document.getElementById('aiEn').checked = autonomousMode.enabled;
-    document.getElementById('aiAuto').checked = autonomousMode.auto_engage||false;
+    if (Date.now() - _autonomousDirty > 5000) document.getElementById('aiEn').checked = autonomousMode.enabled;
+    if (Date.now() - _autonomousDirty > 5000) document.getElementById('aiAuto').checked = autonomousMode.auto_engage||false;
     var th = autonomousMode.threat_threshold||70;
-    document.getElementById('thrSlider').value = th;
+    if (Date.now() - _autonomousDirty > 5000) {
+      document.getElementById('thrSlider').value = th;
+      var lbl = document.getElementById('thrLabel');
+      if (lbl) lbl.textContent = th;
+    }
     document.getElementById('thrVal').textContent = th;
   }
-  var ms = missionState;
-  document.getElementById('uptime').textContent = fmtTime(ms.uptime_sec);
-  document.getElementById('mTD').textContent = ms.threats_detected||threats.length;
+  var ms = missionState || {};
+  // Uptime: client-side timer only (see _pageStart setInterval above)
+  // Unique RF Sources
+  document.getElementById('mTD').textContent = ms.threats_detected || threats.length || 0;
+  // Threats Engaged = threats with score >= 70
+  var engaged = threats.filter(function(t){ return (t.threat_score||0) >= 70; }).length;
+  document.getElementById('mTE').textContent = engaged;
+  // Swarms
+  document.getElementById('mSE').textContent = ms.swarms_eliminated || 0;
   document.getElementById('mTE').textContent = ms.threats_engaged||0;
   document.getElementById('mTN').textContent = ms.threats_neutralized||0;
-  document.getElementById('mSD').textContent = ms.swarms_detected||0;
+  
+  // Swarm alert
+  var ms2 = missionState || {};
+  var activeSwarms = ms2.active_swarms || 0;
+  var swarmEl = document.getElementById('swarmAlert');
+  if (swarmEl) swarmEl.style.display = activeSwarms > 0 ? 'block' : 'none';
+  document.getElementById('mSD').textContent = ms2.swarms_detected || 0;
+
+  // legacy fallback
+  // document.getElementById('mSD').textContent = ms.swarms_detected||0;
   document.getElementById('mSE').textContent = ms.swarms_eliminated||0;
   document.getElementById('mAA').textContent = ms.autonomous_actions||0;
   var bands = (rfSpectrum&&rfSpectrum.bands)?rfSpectrum.bands:{};
@@ -391,17 +495,29 @@ function updateUI() {
   var sets = [['rfb1','rfc1',bands['433']||0],['rfb2','rfc2',bands['900']||0],['rfb3','rfc3',bands['2.4']||0],['rfb4','rfc4',bands['other']||0]];
   sets.forEach(function(s){ document.getElementById(s[0]).style.width=Math.round((s[2]/tot)*100)+'%'; document.getElementById(s[1]).textContent=s[2]; });
   var nfEl = document.getElementById('noiseFloor');
-  if (nfEl) nfEl.textContent = 'Noise floor: ' + (noiseFloorDb != null ? noiseFloorDb.toFixed(1) : '--') + ' dB';
+  if (nfEl) nfEl.textContent = 'Noise floor: ' + (noiseFloorDb !== null ? noiseFloorDb.toFixed(1) : '--') + ' dB';
   var abEl = document.getElementById('activeBand');
   if (abEl && activeBandName) abEl.textContent = '◉ SCANNING: ' + activeBandName;
   document.getElementById('tCount').textContent = threats.length;
   document.getElementById('tList').innerHTML = threats.map(function(t) {
-    var sc = t.threat_score||0;
+    var sc  = t.threat_score||0;
     var cls = sc>70?'hi':sc>40?'md':'';
     var scCls = sc>70?'sc-hi':sc>40?'sc-md':'sc-lo';
-    var icon = t.status==='JAMMED'?'[JAM]':t.swarm_member?'[SWM]':'[DET]';
-    var jam = t.jam_progress>0?'<div class="jam-bar"><div class="jam-fill" style="width:'+t.jam_progress+'%"></div></div>':'';
-    return '<div class="threat-card '+cls+'"><div class="t-hdr"><span class="t-id">'+t.id+' '+icon+' '+(t.type||'RF Source')+'</span><span class="t-score '+scCls+'">'+sc+'</span></div><div class="t-data">Freq: '+t.freq.toFixed(3)+' GHz | Power: '+t.power+' dBm | Range: '+t.range+' km</div><div class="t-data">Speed: '+t.speed+' m/s | Alt: '+t.altitude+'m | Bearing: '+t.bearing+'</div>'+jam+'</div>';
+    var state = t.state||'DETECTED';
+    var stateColor = state==='NEUTRALIZED'?'#ff4444':state==='ENGAGED'?'#ffaa00':'#00ff41';
+    var stateIcon  = state==='NEUTRALIZED'?'[NEUTRALIZED]':state==='ENGAGED'?'[ENGAGED]':t.swarm_member?'[SWARM]':'[DETECTED]';
+    var barW = Math.min(100, sc);
+    var barColor = sc>70?'#ff4444':sc>40?'#ffaa00':'#00ff41';
+    return '<div class="threat-card '+cls+'" style="border-left:3px solid '+stateColor+';margin-bottom:6px;padding:6px 8px;">'
+      + '<div class="t-hdr"><span class="t-id" style="color:'+stateColor+';">TGT-'+t.id+' '+(t.type||'RF')+'</span>'
+      + '<span class="t-score '+scCls+'" style="color:'+stateColor+';">'+sc+'</span></div>'
+      + '<div class="t-data" style="color:#aaffaa;">'+t.freq_mhz.toFixed(3)+' MHz | '+t.power_db.toFixed(1)+' dBm | '+t.band+'</div>'
+      + '<div class="t-data" style="color:#ffff00;font-size:10px;">'+(t.protocol||t.type)+' — '+(t.confidence||0)+'% confidence</div>'
+      + '<div class="t-data" style="color:#888;font-size:9px;font-style:italic;">'+(t.description||'')+'</div>'
+      + '<div class="t-data" style="color:'+stateColor+';font-weight:bold;">'+stateIcon+'</div>'
+      + '<div style="background:#001a00;border-radius:2px;height:4px;margin-top:4px;">'
+      + '<div style="width:'+barW+'%;height:4px;background:'+barColor+';border-radius:2px;transition:width 0.5s;"></div></div>'
+      + '</div>';
   }).join('');
 }
 
@@ -446,6 +562,18 @@ setInterval(updateSpectrum, 5000);
 updateSpectrum();
 
 fetchData();
+
+var _pageStart = Date.now();
+setInterval(function() {
+  var elapsed = Math.floor((Date.now() - _pageStart) / 1000);
+  var h = Math.floor(elapsed / 3600);
+  var m = Math.floor((elapsed % 3600) / 60);
+  var s = elapsed % 60;
+  var fmt = h + ':' + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+  var el = document.getElementById('uptime');
+  if (el) el.textContent = fmt;
+}, 1000);
+
 setInterval(fetchData, 2000);
 </script>
 </body>

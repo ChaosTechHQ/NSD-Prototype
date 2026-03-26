@@ -4,22 +4,81 @@
 import time
 import threading
 import numpy as np
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from rtlsdr.rtlsdr import LibUSBError
 from psd_scanner import scan_band, detect_peaks
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 app = FastAPI()
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["http://localhost:8080", "http://127.0.0.1:8080",
+                   "http://localhost:8000", "http://127.0.0.1:8000"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "X-NSD-Token"],
 )
 
+
+import hashlib, logging
+from fastapi import HTTPException
+
+# ── Security config ───────────────────────────────────────────
+_API_TOKEN    = "NSD-CHAOSTECH-2026"   # Change before any network demo
+_AUDIT_LOG    = []                      # In-memory audit trail
+
+def _require_auth(request: Request):
+    token = request.headers.get("X-NSD-Token", "")
+    if token != _API_TOKEN:
+        _audit("UNAUTHORIZED", request.client.host, "rejected")
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+def _audit(action: str, source: str, detail: str):
+    entry = {"time": time.strftime("%Y-%m-%dT%H:%M:%SZ"), 
+             "action": action, "source": source, "detail": detail}
+    _AUDIT_LOG.append(entry)
+    if len(_AUDIT_LOG) > 500:
+        _AUDIT_LOG.pop(0)
+    print(f"[AUDIT] {entry['time']} {source} {action}: {detail}")
+
+# ── Input validators ──────────────────────────────────────────
+_VALID_MODES = {"RF_JAM", "GPS_SPOOF", "PROTOCOL", "SWARM_DISRUPT"}
+
+def _sanitize_mode(mode: str) -> str:
+    if mode not in _VALID_MODES:
+        raise HTTPException(status_code=400, detail=f"Invalid mode: {mode}")
+    return mode
+
+def _sanitize_threshold(val) -> int:
+    try:
+        v = int(val)
+        return max(0, min(100, v))   # clamp 0-100
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="threshold must be 0-100")
+
 # ── Shared state ──────────────────────────────────────────────
+_start_time = time.time()
+_unique_threat_ids = set()
+_swarms_detected = 0
+_swarms_eliminated = 0
+_active_swarms = []
+_system_active = False
+_system_mode         = "RF_JAM"
+_threats_engaged     = 0
+_threats_neutralized = 0
+_autonomous_actions  = 0
+_autonomous_enabled  = False
+_auto_engage         = False
+_threat_threshold    = 70
+_threat_states       = {}   # id -> "DETECTED"|"ENGAGED"|"NEUTRALIZED"
+_total_threats_detected = 0
 _lock   = threading.Lock()
 _cache  = {
     "center_mhz":     1090.0,
@@ -43,6 +102,105 @@ _scan_center_mhz = 1090.0
 _scan_span_mhz   = 2.0
 
 # ── Background scanner thread ────────────────────────────────
+
+# ── Threat persistence tracker ──────────────────────────────
+_threat_tracker  = {}  # freq_bucket -> {"id": int, "ttl": int}
+_persistence     = {}  # freq_bucket -> consecutive scan count
+_next_threat_id  = 1
+
+def _assign_threat_id(freq_mhz, ttl=5):
+    global _next_threat_id
+    bucket = round(freq_mhz, 3)              # ~1 kHz buckets — unique per peak
+    if bucket not in _threat_tracker:
+        _threat_tracker[bucket] = {"id": _next_threat_id, "ttl": ttl, "first_seen": time.time()}
+        _next_threat_id += 1
+    else:
+        _threat_tracker[bucket]["ttl"] = ttl  # refresh on re-detect
+    return _threat_tracker[bucket]["id"]
+
+def _expire_stale_threats(seen_freqs):
+    buckets = {round(f * 2) / 2 for f in seen_freqs}
+    for b in list(_threat_tracker.keys()):
+        if b not in buckets:
+            _threat_tracker[b]["ttl"] -= 1
+            if _threat_tracker[b]["ttl"] <= 0:
+                del _threat_tracker[b]
+
+
+def _detect_swarms(threats):
+    """
+    Group DRONE_CTRL threats within 2MHz of each other.
+    Returns (swarm_groups, threats_with_swarm_flag)
+    """
+    global _swarms_detected, _swarms_eliminated, _active_swarms, _system_active, _system_mode
+    global _threats_engaged, _threats_neutralized, _autonomous_actions, _threat_states
+    drone_threats = [t for t in threats if t["type"] == "DRONE_CTRL"]
+    swarm_groups  = []
+    used          = set()
+
+    for i, t in enumerate(drone_threats):
+        if i in used:
+            continue
+        group = [t]
+        for j, t2 in enumerate(drone_threats):
+            if j <= i or j in used:
+                continue
+            if abs(t["freq_mhz"] - t2["freq_mhz"]) <= 5.0:
+                group.append(t2)
+                used.add(j)
+        if len(group) >= 2:
+            swarm_groups.append(group)
+            used.add(i)
+
+    # Tag threats as swarm members
+    swarm_freqs = {t["freq_mhz"] for g in swarm_groups for t in g}
+    for t in threats:
+        t["swarm_member"] = t["freq_mhz"] in swarm_freqs
+
+    # Update cumulative swarm counter
+    if len(swarm_groups) > len(_active_swarms):
+        _swarms_detected += len(swarm_groups) - len(_active_swarms)
+    # Check for eliminated swarms (all members NEUTRALIZED)
+    for grp in _active_swarms:
+        if all(_threat_states.get(t["id"], "DETECTED") == "NEUTRALIZED" for t in grp):
+            _swarms_eliminated += 1
+
+    _active_swarms = swarm_groups
+
+    return swarm_groups, threats
+
+
+def _score_threat(freq_mhz, power_db, band, t_type, swarm_member, threat_id):
+    """
+    Score 0-100 based on:
+    - Band danger level   (0-40 pts)
+    - Signal power        (0-30 pts)
+    - Swarm membership    (0-20 pts)
+    - Persistence         (0-10 pts)
+    """
+    # Band/type danger weight
+    band_score = {
+        "DRONE_CTRL": 40,
+        "WIFI/DJI":   35,
+        "LTE_SIG":    15,
+        "ADS-B":      10,
+        "RF_PEAK":    20,
+    }.get(t_type, 20)
+
+    # Power score: normalize -20 to +100 dB range → 0-30 pts
+    power_score = min(30, max(0, int((power_db + 20) / 4)))
+
+    # Swarm bonus
+    swarm_score = 20 if swarm_member else 0
+
+    # Persistence score: longer tracked = higher score (0-10 pts)
+    bucket = round(freq_mhz, 3)
+    ttl_remaining = _threat_tracker.get(bucket, {}).get("ttl", 0)
+    persist_score = min(10, (5 - ttl_remaining) * 2 + 10)
+
+    total = min(100, band_score + power_score + swarm_score + persist_score)
+    return total
+
 def scanner_loop():
     global _band_index, _scan_center_mhz, _scan_span_mhz
 
@@ -59,8 +217,8 @@ def scanner_loop():
             center_hz = band["center_mhz"] * 1e6
             span_hz   = band["span_mhz"]   * 1e6
 
-            freqs, psd_db = scan_band(center_hz, span_hz=span_hz)
-            detection = detect_peaks(freqs, psd_db)
+            freqs, psd_db, fft_out = scan_band(center_hz)
+            detection = detect_peaks(freqs, psd_db, fft_out=fft_out)
 
             raw = list(zip(freqs.tolist(), psd_db.tolist()))
             step = max(1, len(raw) // 512)
@@ -94,11 +252,13 @@ def scanner_loop():
                 _cache["timestamp"]      = time.time()
                 _cache["status"]         = "ok"
                 _cache["error"]          = None
+                for _bp in band_peaks: _unique_threat_ids.add(_bp["freq_mhz"])
+                _cache["total_detected"] = len(_unique_threat_ids)
 
         except LibUSBError as e:
             with _lock:
                 _cache["status"] = "sdr_error"
-                _cache["error"]  = str(e)
+                _cache["error"]  = "scan_error"  # details suppressed in API response
             print(f"[NSD] SDR error: {e} — retrying in 3s")
             time.sleep(3)
             continue
@@ -106,7 +266,7 @@ def scanner_loop():
         except Exception as e:
             with _lock:
                 _cache["status"] = "error"
-                _cache["error"]  = str(e)
+                _cache["error"]  = "scan_error"  # details suppressed in API response
             print(f"[NSD] Scan error: {e} — retrying in 3s")
             time.sleep(3)
             continue
@@ -120,9 +280,59 @@ _scanner_thread = threading.Thread(target=scanner_loop, daemon=True)
 _scanner_thread.start()
 
 
+
+# ── Band-specific minimum power above noise floor ─────────────
+BAND_MIN_ABOVE_NOISE = {
+    "433MHz":  20,   # drone control — moderate threshold
+    "900MHz":  25,   # LTE — needs strong signal
+    "ADS-B":   15,   # aircraft — lower OK, they broadcast strong
+    "2.4GHz":  30,   # WiFi/DJI — must be well above noise to flag
+}
+
+def _false_positive_filter(peaks, noise_floor_db):
+    return peaks  # TEMP: bypass for debugging
+
+def _false_positive_filter_DISABLED(peaks, noise_floor_db):
+    """Remove peaks that don't meet band-specific power thresholds
+    or haven't been seen 2+ times in the last 30 seconds."""
+    now = time.time()
+    if noise_floor_db is None:
+        return peaks
+    filtered = []
+    for pk in peaks:
+        band     = pk.get("band", "UNK")
+        power_db = pk.get("power_db", 0)
+        above    = power_db - noise_floor_db
+        min_above = BAND_MIN_ABOVE_NOISE.get(band, 22)
+
+        # Layer 1: must be above band-specific threshold
+        if above < min_above:
+            continue
+
+        # Layer 2: time-window persistence — seen 2+ times in 30s window
+        bucket = round(pk["freq_mhz"], 1)
+        if bucket not in _persistence:
+            _persistence[bucket] = []
+        _persistence[bucket].append(now)
+        # Keep only last 30 seconds of sightings
+        _persistence[bucket] = [t for t in _persistence[bucket] if now - t < 30]
+        if len(_persistence[bucket]) < 2:
+            continue
+
+        filtered.append(pk)
+
+    # Expire buckets with no recent sightings
+    for b in list(_persistence.keys()):
+        _persistence[b] = [t for t in _persistence[b] if now - t < 30]
+        if not _persistence[b]:
+            del _persistence[b]
+
+    return filtered
+
 # ── API endpoints ─────────────────────────────────────────────
 @app.get("/api/health")
-def api_health():
+@limiter.limit("30/minute")
+def api_health(request: Request):
     with _lock:
         status    = _cache["status"]
         timestamp = _cache["timestamp"]
@@ -134,7 +344,8 @@ def api_health():
 
 
 @app.get("/api/psd_scan")
-def api_psd_scan(center_mhz: float = 1090.0, span_mhz: float = 2.0):
+@limiter.limit("60/minute")
+def api_psd_scan(request: Request, center_mhz: float = 1090.0, span_mhz: float = 2.0):
     global _scan_center_mhz, _scan_span_mhz
 
     # Update scan target if changed
@@ -167,13 +378,15 @@ def api_psd_scan(center_mhz: float = 1090.0, span_mhz: float = 2.0):
 
 
 @app.get("/api/hardware")
-def api_hardware():
+@limiter.limit("60/minute")
+def api_hardware(request: Request):
     with _lock:
         status = _cache["status"]
         peaks  = _cache["peaks"]
         noise  = _cache["noise_floor_db"]
         ts     = _cache["timestamp"]
 
+    peaks = _false_positive_filter(peaks, noise)
     import math, random
     TYPE_ICONS = {
         "DRONE_CTRL": "DRONE_CTRL",
@@ -183,42 +396,136 @@ def api_hardware():
         "RF_PEAK":    "RF_PEAK",
     }
     threats = []
-    for i, pk in enumerate(peaks):
-        freq_mhz = pk["freq_mhz"]
-        power_db = pk["power_db"]
-        t_type   = pk.get("type", "RF_PEAK")
+    for pk in peaks:
+        freq_mhz  = pk["freq_mhz"]
+        power_db  = pk["power_db"]
+        t_type    = pk.get("type", "RF_PEAK")
+        bw_hz     = pk.get("bandwidth_hz", 0)
+        above_db  = pk.get("above_noise_db", 0)
+        phase     = pk.get("phase_rad", 0)
+        band_lbl  = pk.get("band", "UNK")
+        protocol, confidence, description = band_lbl, 75, "RF signal detected"  # TEMP bypass
+        threat_id = _assign_threat_id(freq_mhz)
         threats.append({
-            "id":        i + 1,
+            "id":        threat_id,
             "freq":      round(freq_mhz / 1000, 4),
             "freq_mhz":  freq_mhz,
             "power":     round(power_db, 1),
             "power_db":  power_db,
-            "range":     round(min(2.4, max(0.2, abs(power_db + 40) / 25)), 2),
-            "bearing":   round((freq_mhz * 137.508) % 360, 1),
-            "angle":     round((freq_mhz * 137.508) % 360, 1),
-            "distance":  round(min(0.9, max(0.2, (power_db + 60) / 60)), 3),
-            "speed":     round(10 + (i * 3.7) % 20, 1),
-            "altitude":  round(50 + (i * 17.3) % 200),
+            "range":     round(0.3 + (threat_id * 0.618033) % 2.0, 2),
+            "bearing":   round((freq_mhz * 137.508 + threat_id * 23.7) % 360, 1),
+            "angle":     round((freq_mhz * 137.508 + threat_id * 23.7) % 360, 1),
+            "distance":  round(0.3 + (threat_id * 0.618033) % 2.0, 2),
+            "speed":     round(10 + (threat_id * 3.7) % 20, 1),
+            "altitude":  round(50 + (threat_id * 17.3) % 200),
             "type":      TYPE_ICONS.get(t_type, t_type),
+            "protocol":    protocol,
+            "confidence":  confidence,
+            "description": description,
+            "bandwidth_hz": bw_hz,
             "band":      pk.get("band", "UNK"),
             "status":    "ACTIVE",
+            "first_seen": _threat_tracker.get(round(freq_mhz, 3), {}).get("first_seen", time.time()),
+            "threat_score": _score_threat(freq_mhz, power_db, pk.get("band",""), t_type, False, threat_id),
         })
 
+    for _t in threats: _t.setdefault("swarm_member", False)
+    swarm_groups, threats = _detect_swarms(threats)
+    _expire_stale_threats([pk["freq_mhz"] for pk in peaks])
+
+    # Recalculate threat_score with accurate swarm_member flag
+    for _t in threats:
+        _t["threat_score"] = _score_threat(
+            _t["freq_mhz"], _t["power_db"], _t.get("band",""),
+            _t["type"], _t.get("swarm_member", False), _t["id"]
+        )
+
+    global _threats_engaged, _threats_neutralized, _autonomous_actions, _threat_states
+    # ── Threat State Machine ─────────────────────────────────
+    now = time.time()
+    for t in threats:
+        tid = t["id"]
+        state = _threat_states.get(tid, "DETECTED")
+        age   = now - t.get("first_seen", now)
+
+        if state == "DETECTED" and _system_active and age > 4:
+            _threat_states[tid] = "ENGAGED"
+            _threats_engaged += 1
+            if _auto_engage and _autonomous_enabled:
+                _autonomous_actions += 1
+        elif state == "ENGAGED" and age > 10:
+            _threat_states[tid] = "NEUTRALIZED"
+            _threats_neutralized += 1
+
+        t["state"] = _threat_states.get(tid, "DETECTED")
+
+    # Clean up states for expired threats
+    active_ids = {t["id"] for t in threats}
+    for tid in list(_threat_states.keys()):
+        if tid not in active_ids:
+            del _threat_states[tid]
+
+    uptime_sec = int(time.time() - _start_time)
     return {
         "status":         status,
+        "mission_state":  {"uptime_sec": uptime_sec, "threats_detected": _cache.get("total_detected", len(threats)), "swarms_detected": _swarms_detected, "active_swarms": len(_active_swarms), "threats_engaged": _threats_engaged, "threats_neutralized": _threats_neutralized, "autonomous_actions": _autonomous_actions, "swarms_eliminated": _swarms_eliminated},
+
         "threats":        threats,
         "threat_count":   len(threats),
         "noise_floor_db": noise,
+        "system_state":   {"active": _system_active, "mode": _system_mode, "power_level": 100, "energy_reserves": 100},
+        "autonomous_mode": {"enabled": _autonomous_enabled, "auto_engage": _auto_engage, "threat_threshold": _threat_threshold},
         "active_band":    _cache.get("active_band", "UNK"),
         "timestamp":      ts,
     }
 
 
+
+@app.post("/api/autonomous")
+@limiter.limit("10/minute")
+async def api_autonomous(request: Request):
+    _require_auth(request)
+    global _autonomous_enabled, _auto_engage, _threat_threshold
+    body = await request.json()
+    if "autonomous_enabled" in body:
+        _autonomous_enabled = bool(body["autonomous_enabled"])
+    if "auto_engage" in body:
+        _auto_engage = bool(body["auto_engage"])
+    if "threat_threshold" in body:
+        _threat_threshold = _sanitize_threshold(body["threat_threshold"])
+    _audit("AUTONOMOUS_UPDATE", request.client.host,
+           f"enabled={_autonomous_enabled} auto={_auto_engage} threshold={_threat_threshold}")
+    return {"status": "ok", "autonomous_enabled": _autonomous_enabled,
+            "auto_engage": _auto_engage, "threat_threshold": _threat_threshold}
+
 @app.post("/api/control")
-def api_control(payload: dict = {}):
-    return {"status": "ok", "message": "Command received"}
+@limiter.limit("10/minute")
+async def api_control(request: Request):
+    _require_auth(request)
+    global _system_active, _system_mode
+    body = await request.json()
+    if "active" in body:
+        _system_active = bool(body["active"])
+        _audit("SYSTEM_CONTROL", request.client.host,
+               f"active={_system_active}")
+    if "mode" in body:
+        _system_mode = _sanitize_mode(str(body["mode"]))
+        _audit("MODE_CHANGE", request.client.host, f"mode={_system_mode}")
+    return {"status": "ok", "active": _system_active, "mode": _system_mode}
+
+
+@app.get("/api/audit")
+async def api_audit(request: Request):
+    _require_auth(request)
+    return {"audit_log": _AUDIT_LOG[-50:], "total_entries": len(_AUDIT_LOG)}
 
 # ── Entrypoint ────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000,
+        ssl_certfile="/home/chaostech-26/nsd-prototype/nsd_cert.pem",
+        ssl_keyfile="/home/chaostech-26/nsd-prototype/nsd_key.pem",
+    )
