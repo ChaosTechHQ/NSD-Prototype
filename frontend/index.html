@@ -1,0 +1,929 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NSD v19 — ChaosTech Defense</title>
+<style>
+  :root {
+    --green:     #00ff41;
+    --green-dim: #007a1f;
+    --green-mid: #00cc33;
+    --red:       #ff2222;
+    --yellow:    #ffdd00;
+    --orange:    #ff8800;
+    --bg:        #080808;
+    --panel:     #0d0d0d;
+    --border:    #1c1c1c;
+    --font:      'Courier New', Courier, monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    background: var(--bg);
+    color: var(--green);
+    font-family: var(--font);
+    font-size: 13px;
+    min-height: 100vh;
+  }
+
+  /* ── CRITICAL ALERT BANNER ── */
+  #alert-banner {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 9999;
+    background: #1a0000;
+    border-bottom: 3px solid var(--red);
+    padding: 10px 20px;
+    animation: alertPulse 0.5s ease-in-out;
+  }
+  #alert-banner.visible { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  @keyframes alertPulse {
+    0%   { opacity: 0; transform: translateY(-100%); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+  .alert-icon { color: var(--red); font-size: 20px; animation: blink 0.5s step-end infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .alert-text { flex: 1; }
+  .alert-title { color: var(--red); font-size: 14px; font-weight: bold; letter-spacing: 3px; }
+  .alert-detail { color: #ff8888; font-size: 12px; margin-top: 2px; }
+  .alert-dismiss {
+    background: none; border: 1px solid var(--red); color: var(--red);
+    padding: 4px 12px; cursor: pointer; font-family: var(--font); font-size: 11px;
+    letter-spacing: 1px;
+  }
+  .alert-dismiss:hover { background: #330000; }
+
+  /* ── HEADER FLASH ── */
+  @keyframes headerFlash {
+    0%, 100% { background: #120000; }
+    50%       { background: #3a0000; }
+  }
+  #header.critical-flash { animation: headerFlash 0.4s ease-in-out 4; }
+
+  /* ── HEADER ── */
+  #header {
+    background: #120000;
+    border-bottom: 2px solid var(--red);
+    padding: 8px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .hdr-title {
+    color: var(--red);
+    font-size: 15px;
+    font-weight: bold;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+  }
+  .hdr-right { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  #mode-badge {
+    padding: 3px 12px;
+    border-radius: 3px;
+    font-size: 12px;
+    font-weight: bold;
+    letter-spacing: 2px;
+  }
+  .mode-live { background: #002200; color: var(--green); border: 1px solid var(--green); }
+  .mode-sim  { background: #332200; color: var(--yellow); border: 1px solid var(--yellow); }
+  #uptime { color: #666; font-size: 12px; letter-spacing: 1px; }
+
+  /* ── STATS BAR ── */
+  #stats-bar {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    padding: 10px 20px;
+    background: #0a0a0a;
+    border-bottom: 1px solid var(--border);
+  }
+  .stat-box {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px 12px;
+    text-align: center;
+  }
+  .stat-value { font-size: 24px; font-weight: bold; color: var(--green); line-height: 1; }
+  .stat-label { font-size: 9px; color: #555; letter-spacing: 2px; margin-top: 4px; }
+  .stat-box.warn .stat-value { color: var(--red); }
+  .stat-box.hw-ok  { border-color: var(--green-dim); }
+  .stat-box.hw-bad { border-color: var(--red); }
+
+  /* ── MAIN CONTENT ── */
+  #content {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    gap: 10px;
+    padding: 10px 20px;
+  }
+
+  /* ── PANELS ── */
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 10px;
+    overflow: hidden;
+  }
+  .panel-title {
+    color: var(--green-dim);
+    font-size: 10px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+    padding-bottom: 5px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* ── BAND TABLE ── */
+  #band-wrap { overflow-x: auto; }
+  #band-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  #band-table th {
+    color: #444;
+    text-align: left;
+    padding: 3px 10px;
+    border-bottom: 1px solid var(--border);
+    font-weight: normal;
+    letter-spacing: 1px;
+    font-size: 10px;
+  }
+  #band-table td {
+    padding: 5px 10px;
+    border-bottom: 1px solid #111;
+  }
+  .row-detect td { background: #0d0000; }
+  .row-clear  td { }
+  .det-badge-yes { color: var(--red); font-weight: bold; }
+  .det-badge-no  { color: #2a2a2a; }
+  .sim-tag { color: #444; font-size: 9px; margin-left: 4px; }
+  .snr-high   { color: var(--red); font-weight: bold; }
+  .snr-medium { color: var(--yellow); }
+  .snr-low    { color: #555; }
+
+  /* ── THREAT LIST ── */
+  #threat-list {
+    max-height: 520px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: #222 #0a0a0a;
+  }
+  .threat-card {
+    border: 1px solid #1a1a1a;
+    border-radius: 4px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    font-size: 12px;
+    animation: fadeIn 0.3s ease;
+  }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+
+  .tc-CRITICAL { border-left: 3px solid var(--red);    background: #150000; }
+  .tc-HIGH     { border-left: 3px solid var(--orange);  background: #150900; }
+  .tc-MEDIUM   { border-left: 3px solid var(--yellow);  background: #141400; }
+  .tc-LOW      { border-left: 3px solid var(--green-dim); background: #001500; }
+
+  .tc-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+  .tc-id { font-weight: bold; font-size: 13px; }
+  .tc-level-CRITICAL { color: var(--red); font-size: 10px; letter-spacing: 1px; }
+  .tc-level-HIGH     { color: var(--orange); font-size: 10px; letter-spacing: 1px; }
+  .tc-level-MEDIUM   { color: var(--yellow); font-size: 10px; letter-spacing: 1px; }
+  .tc-level-LOW      { color: var(--green-dim); font-size: 10px; letter-spacing: 1px; }
+
+  .tc-freq { font-size: 14px; color: var(--green); margin-bottom: 3px; }
+  .tc-proto { color: #888; font-size: 11px; margin-bottom: 4px; }
+  .tc-detail { color: #666; font-size: 10px; display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 5px; }
+  .tc-bar-bg { height: 3px; background: #111; border-radius: 2px; overflow: hidden; }
+  .tc-bar-fill { height: 100%; border-radius: 2px; transition: width 0.4s ease; }
+
+  /* ── SPECTRUM ── */
+  #spectrum-section {
+    padding: 10px 20px 20px;
+  }
+  #spectrum-canvas {
+    display: block;
+    width: 100%;
+    height: 160px;
+    background: #0a0a0a;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+  }
+
+  /* ── DRONE PANEL ── */
+  #drone-section {
+    padding: 10px 20px;
+  }
+  .drone-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .drone-status-row { display: flex; justify-content: space-between; margin: 4px 0; font-size: 12px; }
+  .drone-status-row .lbl { color: #444; }
+  .drone-status-row .val { color: var(--green); font-weight: bold; }
+  .drone-btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
+  .drone-btn {
+    background: #0d0d0d;
+    color: var(--green-dim);
+    border: 1px solid #1c1c1c;
+    padding: 8px 4px;
+    font-family: var(--font);
+    font-size: 10px;
+    letter-spacing: 1px;
+    cursor: pointer;
+    border-radius: 3px;
+    text-align: center;
+  }
+  .drone-btn:hover { background: #1a1a1a; border-color: var(--green-dim); color: var(--green); }
+  .drone-btn.armed { color: var(--red); border-color: var(--red); background: #150000; }
+  .drone-btn.takeoff { color: var(--green); border-color: var(--green); }
+  #drone-log {
+    height: 80px;
+    overflow-y: auto;
+    background: #050505;
+    border: 1px solid #111;
+    border-radius: 3px;
+    padding: 6px 8px;
+    font-size: 10px;
+    color: #444;
+    margin-top: 8px;
+    scrollbar-width: thin;
+    scrollbar-color: #222 #0a0a0a;
+  }
+  #drone-log .log-entry { margin-bottom: 2px; }
+  #drone-log .log-ok  { color: var(--green-dim); }
+  #drone-log .log-err { color: var(--red); }
+  #drone-log .log-info { color: #555; }
+  .drone-connect-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .drone-connect-bar input {
+    background: #111; color: var(--green); border: 1px solid #333;
+    padding: 4px 8px; font-family: var(--font); font-size: 11px;
+    border-radius: 3px; width: 160px;
+  }
+  .drone-connect-bar button {
+    background: #001a00; color: var(--green-dim); border: 1px solid var(--green-dim);
+    padding: 4px 12px; font-family: var(--font); font-size: 10px;
+    letter-spacing: 1px; border-radius: 3px; cursor: pointer;
+  }
+  .drone-connect-bar button:hover { background: #002a00; color: var(--green); }
+  #drone-conn-badge {
+    font-size: 10px; letter-spacing: 1px; padding: 2px 8px;
+    border-radius: 3px; border: 1px solid #333; color: #444;
+  }
+  #drone-conn-badge.connected { color: var(--green); border-color: var(--green-dim); background: #001500; }
+  #drone-conn-badge.error { color: var(--red); border-color: var(--red); background: #150000; }
+
+  /* ── EMPTY STATE ── */
+  .empty { color: #2a2a2a; text-align: center; padding: 20px; font-size: 11px; letter-spacing: 1px; }
+
+  /* ── HISTORY TABLE ── */
+  #history-section {
+    padding: 10px 20px 20px;
+  }
+  #history-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+  }
+  #history-controls label { color: #444; font-size: 10px; letter-spacing: 1px; }
+  #history-controls select, #history-controls input[type=checkbox] {
+    background: #111; color: var(--green); border: 1px solid #333;
+    padding: 3px 6px; font-family: var(--font); font-size: 11px;
+    border-radius: 3px; cursor: pointer;
+  }
+  .btn-export {
+    margin-left: auto;
+    background: #001a00;
+    color: var(--green-dim);
+    border: 1px solid var(--green-dim);
+    padding: 4px 14px;
+    font-family: var(--font);
+    font-size: 10px;
+    letter-spacing: 2px;
+    border-radius: 3px;
+    cursor: pointer;
+    text-decoration: none;
+  }
+  .btn-export:hover { background: #002a00; color: var(--green); border-color: var(--green); }
+  .btn-report { background: #1a0e00; color: #cc8800; border-color: #cc8800; }
+  .btn-report:hover { background: #2a1800; color: #ffaa00; border-color: #ffaa00; }
+  #history-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  #history-table th {
+    color: #333;
+    text-align: left;
+    padding: 3px 10px;
+    border-bottom: 1px solid #1a1a1a;
+    font-weight: normal;
+    letter-spacing: 1px;
+    font-size: 9px;
+  }
+  #history-table td {
+    padding: 4px 10px;
+    border-bottom: 1px solid #0f0f0f;
+    color: #555;
+  }
+  #history-table tr:hover td { background: #0d0d0d; }
+  .hl-CRITICAL { color: var(--red) !important; }
+  .hl-HIGH     { color: var(--orange) !important; }
+  .hl-MEDIUM   { color: var(--yellow) !important; }
+  .hl-LOW      { color: var(--green-dim) !important; }
+  #history-wrap { overflow-x: auto; max-height: 280px; overflow-y: auto;
+    scrollbar-width: thin; scrollbar-color: #222 #0a0a0a; }
+  #hist-count { color: #333; font-size: 10px; letter-spacing: 1px; }
+
+  /* ── MOBILE RESPONSIVE ── */
+  @media (max-width: 768px) {
+    #content {
+      grid-template-columns: 1fr;
+      padding: 8px;
+    }
+    #stats-bar {
+      grid-template-columns: repeat(2, 1fr);
+      padding: 8px;
+    }
+    .stat-value { font-size: 20px; }
+    #threat-list { max-height: 400px; }
+    #spectrum-canvas { height: 120px; }
+    #spectrum-section { padding: 8px; }
+    .hdr-title { font-size: 13px; }
+    .drone-grid { grid-template-columns: 1fr; }
+  }
+
+  @media (max-width: 480px) {
+    #stats-bar { grid-template-columns: repeat(2, 1fr); }
+    #header { padding: 6px 10px; }
+    #content { padding: 6px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- CRITICAL ALERT BANNER -->
+<div id="alert-banner">
+  <span class="alert-icon">&#9888;</span>
+  <div class="alert-text">
+    <div class="alert-title">&#9632; CRITICAL THREAT DETECTED</div>
+    <div class="alert-detail" id="alert-detail">--</div>
+  </div>
+  <button class="alert-dismiss" onclick="dismissAlert()">DISMISS</button>
+</div>
+
+<!-- HEADER -->
+<div id="header">
+  <div class="hdr-title">&#9632; NSD v19 — Neuro Swarm Disruptor</div>
+  <div class="hdr-right">
+    <div id="mode-badge" class="mode-badge mode-sim">SIM MODE</div>
+    <div id="uptime">UPTIME: --:--:--</div>
+  </div>
+</div>
+
+<!-- STATS BAR -->
+<div id="stats-bar">
+  <div class="stat-box" id="stat-hw">
+    <div class="stat-value" id="val-hw">--</div>
+    <div class="stat-label">HARDWARE</div>
+  </div>
+  <div class="stat-box warn" id="stat-active">
+    <div class="stat-value" id="val-active">0</div>
+    <div class="stat-label">ACTIVE THREATS</div>
+  </div>
+  <div class="stat-box" id="stat-total">
+    <div class="stat-value" id="val-total">0</div>
+    <div class="stat-label">TOTAL DETECTED</div>
+  </div>
+  <div class="stat-box" id="stat-cycle">
+    <div class="stat-value" id="val-cycle">--</div>
+    <div class="stat-label">SCAN CYCLE (s)</div>
+  </div>
+</div>
+
+<!-- MAIN CONTENT -->
+<div id="content">
+
+  <!-- LEFT: Band table -->
+  <div class="panel">
+    <div class="panel-title">&#9632; RF Band Monitor — Live Detections</div>
+    <div id="band-wrap">
+      <table id="band-table">
+        <thead>
+          <tr>
+            <th>BAND</th>
+            <th>PROTOCOL</th>
+            <th>FREQ (MHz)</th>
+            <th>POWER (dBm)</th>
+            <th>NOISE (dBm)</th>
+            <th>SNR (dB)</th>
+            <th>BW (kHz)</th>
+            <th>STATUS</th>
+          </tr>
+        </thead>
+        <tbody id="band-tbody">
+          <tr><td colspan="8" class="empty">Waiting for scan data...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- RIGHT: Threat list -->
+  <div class="panel">
+    <div class="panel-title">&#9632; Active Threats</div>
+    <div id="threat-list">
+      <div class="empty">No active threats detected.</div>
+    </div>
+  </div>
+
+</div>
+
+<!-- SPECTRUM -->
+<div id="spectrum-section">
+  <div class="panel-title" style="padding: 0 0 6px; color: #333; font-size: 10px; letter-spacing: 3px;">&#9632; SPECTRUM OVERVIEW — RELATIVE POWER (dB) vs NOISE FLOOR &nbsp;<span style="color:#2a2a2a;font-size:9px;">[UNCALIBRATED — RTL-SDR RELATIVE UNITS]</span></div>
+  <canvas id="spectrum-canvas"></canvas>
+</div>
+
+<!-- DRONE INTERCEPT PANEL -->
+<div id="drone-section">
+  <div class="panel-title" style="padding: 0 0 8px; color: #333; font-size: 10px; letter-spacing: 3px;">&#9632; DRONE INTERCEPT CONTROL — HS720R / BLUE UAS</div>
+  <div class="panel">
+    <div class="drone-connect-bar">
+      <input type="text" id="drone-ip" value="192.168.0.1" placeholder="Drone IP">
+      <button onclick="droneConnect()">CONNECT</button>
+      <span id="drone-conn-badge">OFFLINE</span>
+    </div>
+    <div class="drone-grid">
+      <!-- Status -->
+      <div>
+        <div class="panel-title" style="font-size:9px;">VEHICLE STATUS</div>
+        <div class="drone-status-row"><span class="lbl">STATE</span><span class="val" id="d-state">--</span></div>
+        <div class="drone-status-row"><span class="lbl">ALTITUDE</span><span class="val" id="d-alt">-- m</span></div>
+        <div class="drone-status-row"><span class="lbl">BATTERY</span><span class="val" id="d-bat">--%</span></div>
+        <div class="drone-status-row"><span class="lbl">GPS</span><span class="val" id="d-gps">--</span></div>
+        <div class="drone-status-row"><span class="lbl">SIGNAL</span><span class="val" id="d-sig">--</span></div>
+        <div class="drone-status-row"><span class="lbl">MODE</span><span class="val" id="d-mode">--</span></div>
+      </div>
+      <!-- Controls -->
+      <div>
+        <div class="panel-title" style="font-size:9px;">FLIGHT CONTROL</div>
+        <div class="drone-btn-grid">
+          <button class="drone-btn takeoff" onclick="droneCmd('takeoff')">&#9650; TAKEOFF</button>
+          <button class="drone-btn" onclick="droneCmd('land')">&#9660; LAND</button>
+          <button class="drone-btn" onclick="droneCmd('rth')">&#8617; RTH</button>
+          <button class="drone-btn" onclick="droneCmd('hover')">&#9632; HOVER</button>
+          <button class="drone-btn" onclick="droneCmd('patrol')">&#9654; PATROL</button>
+          <button class="drone-btn armed" onclick="droneCmd('emergency')">&#9888; E-STOP</button>
+        </div>
+      </div>
+    </div>
+    <div id="drone-log"><div class="log-entry log-info">-- drone log --</div></div>
+  </div>
+</div>
+
+<!-- HISTORY -->
+<div id="history-section">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;gap:8px;">
+    <div class="panel-title" style="padding:0;color:#333;font-size:10px;letter-spacing:3px;">&#9632; DETECTION HISTORY LOG</div>
+    <span id="hist-count"></span>
+    <a id="btn-export-csv" class="btn-export" href="/api/export/csv" download="nsd_detections.csv">&#11015; EXPORT CSV</a>
+    <a id="btn-report-pdf" class="btn-export btn-report" href="/api/report/pdf" download>&#128196; GENERATE REPORT</a>
+  </div>
+  <div id="history-controls">
+    <label>SHOW
+      <select id="hist-limit">
+        <option value="50">50</option>
+        <option value="100" selected>100</option>
+        <option value="250">250</option>
+        <option value="500">500</option>
+      </select>
+    </label>
+    <label><input type="checkbox" id="hist-real-only"> REAL ONLY (exclude SIM)</label>
+  </div>
+  <div class="panel" style="padding:0;">
+    <div id="history-wrap">
+      <table id="history-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>TIMESTAMP (ET)</th>
+            <th>BAND</th>
+            <th>FREQ (MHz)</th>
+            <th>POWER (dB)</th>
+            <th>SNR (dB)</th>
+            <th>PROTOCOL</th>
+            <th>LEVEL</th>
+            <th>SCORE</th>
+            <th>SOURCE</th>
+          </tr>
+        </thead>
+        <tbody id="history-tbody">
+          <tr><td colspan="10" class="empty">Loading history...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+const API_BASE = window.location.origin;
+let lastData   = null;
+let ws         = null;
+let wsRetries  = 0;
+
+function fmtEastern(isoStr) {
+  if (!isoStr || isoStr === '--') return '--';
+  try {
+    const d = new Date(isoStr);
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    }).format(d);
+  } catch (e) { return isoStr; }
+}
+
+function fmtUptime(s) {
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = Math.floor(s % 60);
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+}
+
+function levelColor(lvl) {
+  return { CRITICAL:'#ff2222', HIGH:'#ff8800', MEDIUM:'#ffdd00', LOW:'#007a1f' }[lvl] || '#444';
+}
+
+function snrClass(snr) {
+  if (snr >= 20) return 'snr-high';
+  if (snr >= 12) return 'snr-medium';
+  return 'snr-low';
+}
+
+function updateUI(data) {
+  lastData = data;
+  const sim = data.simulated;
+  const badge = document.getElementById('mode-badge');
+  badge.textContent = sim ? 'SIM MODE' : 'LIVE RF';
+  badge.className   = 'mode-badge ' + (sim ? 'mode-sim' : 'mode-live');
+  document.getElementById('uptime').textContent = 'UPTIME: ' + fmtUptime(data.uptime_s || 0);
+
+  const hwOk = data.hardware_ok;
+  const hwBox = document.getElementById('stat-hw');
+  document.getElementById('val-hw').textContent     = hwOk ? 'ONLINE' : 'OFFLINE';
+  hwBox.className = 'stat-box ' + (hwOk ? 'hw-ok' : 'hw-bad');
+  document.getElementById('val-active').textContent = data.threat_count   || 0;
+  document.getElementById('val-total').textContent  = data.total_detected || 0;
+  document.getElementById('val-cycle').textContent  =
+    data.cycle_time_s != null ? data.cycle_time_s.toFixed(2) : '--';
+
+  const tbody = document.getElementById('band-tbody');
+  if (data.bands && data.bands.length > 0) {
+    tbody.innerHTML = data.bands.map(b => {
+      const det = b.is_detection;
+      const simTag = b.simulated ? '<span class="sim-tag">[SIM]</span>' : '';
+      const snrVal = b.snr_db != null ? b.snr_db.toFixed(1) : '--';
+      return `<tr class="${det ? 'row-detect' : 'row-clear'}">
+        <td>${b.label || b.band}</td>
+        <td>${b.protocol || '--'}</td>
+        <td>${b.freq_mhz != null ? b.freq_mhz.toFixed(3) : '--'}</td>
+        <td style="color:${det ? '#ff4444' : '#555'}">${b.power_dbm != null ? b.power_dbm.toFixed(1) : '--'}</td>
+        <td style="color:#444">${b.noise_floor_dbm != null ? b.noise_floor_dbm.toFixed(1) : '--'}</td>
+        <td class="${snrClass(b.snr_db)}">${snrVal}</td>
+        <td style="color:#555">${b.bandwidth_khz != null ? b.bandwidth_khz.toFixed(0) : '--'}</td>
+        <td class="${det ? 'det-badge-yes' : 'det-badge-no'}">${det ? '&#9632; DETECT' : '&#9632; CLEAR'}${simTag}</td>
+      </tr>`;
+    }).join('');
+  } else {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">No band data.</td></tr>';
+  }
+
+  const tlist = document.getElementById('threat-list');
+  if (data.threats && data.threats.length > 0) {
+    const sorted = [...data.threats].sort((a, b) => b.threat_score - a.threat_score);
+    const incomingIds = new Set(sorted.map(t => t.id));
+    tlist.querySelectorAll('.threat-card').forEach(el => {
+      if (!incomingIds.has(el.dataset.tid)) el.remove();
+    });
+    sorted.forEach(t => {
+      const col = levelColor(t.threat_level);
+      const simTag = t.simulated ? ' <span class="sim-tag">[SIM]</span>' : '';
+      let card = tlist.querySelector(`.threat-card[data-tid="${t.id}"]`);
+      if (!card) {
+        card = document.createElement('div');
+        card.className = `threat-card tc-${t.threat_level}`;
+        card.dataset.tid = t.id;
+        card.innerHTML = `
+          <div class="tc-header">
+            <span class="tc-id">${t.id}</span>
+            <span class="tc-level" data-field="level"></span>
+          </div>
+          <div class="tc-freq" data-field="freq"></div>
+          <div class="tc-proto" data-field="proto"></div>
+          <div class="tc-detail" data-field="detail"></div>
+          <div class="tc-bar-bg"><div class="tc-bar-fill" data-field="bar"></div></div>`;
+        tlist.insertBefore(card, tlist.firstChild);
+      }
+      const lvlEl = card.querySelector('[data-field="level"]');
+      lvlEl.className = `tc-level-${t.threat_level}`;
+      lvlEl.innerHTML = `${t.threat_level}${simTag}`;
+      card.querySelector('[data-field="freq"]').textContent = `${t.freq_mhz.toFixed(3)} MHz`;
+      const protoEl = card.querySelector('[data-field="proto"]');
+      if (t.fp_protocol && t.fp_protocol.length > 0) {
+        const confColor = t.fp_confidence === 'HIGH' ? '#00cc44' : t.fp_confidence === 'MEDIUM' ? '#f0a500' : '#888';
+        protoEl.innerHTML = `${t.fp_protocol} <span style="font-size:0.7em;color:${confColor};border:1px solid ${confColor};padding:1px 4px;border-radius:2px">${t.fp_confidence || '?'} ${t.fp_conf_pct || 0}%</span>`;
+      } else {
+        protoEl.textContent = t.protocol;
+      }
+      card.querySelector('[data-field="detail"]').innerHTML =
+        `<span>PWR: ${t.power_dbm.toFixed(1)} dBm</span>` +
+        `<span>SNR: ${t.snr_db.toFixed(1)} dB</span>` +
+        `<span>BW: ${t.bandwidth_khz.toFixed(0)} kHz</span>` +
+        `<span>SCORE: ${t.threat_score}</span>`;
+      const bar = card.querySelector('[data-field="bar"]');
+      bar.style.width      = `${t.threat_score}%`;
+      bar.style.background = col;
+      card.className = `threat-card tc-${t.threat_level}`;
+      if (!t.simulated && t.threat_score >= 75) triggerAlert(t);
+    });
+    const empty = tlist.querySelector('.empty');
+    if (empty) empty.remove();
+  } else {
+    tlist.innerHTML = '<div class="empty">No active threats.</div>';
+  }
+
+  drawSpectrum(data.bands || []);
+}
+
+function drawSpectrum(bands) {
+  const canvas = document.getElementById('spectrum-canvas');
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.clientWidth;
+  const H = canvas.clientHeight;
+  canvas.width  = W * dpr;
+  canvas.height = H * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, W, H);
+  if (!bands || bands.length === 0) return;
+  const N = bands.length;
+  const padL = 52, padR = 10, padT = 10, padB = 28;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+  const allPowers = bands.map(b => b.power_dbm).filter(v => v != null);
+  const allNoise  = bands.map(b => b.noise_floor_dbm).filter(v => v != null);
+  const allVals   = [...allPowers, ...allNoise];
+  if (allVals.length === 0) return;
+  const rawMin = Math.min(...allVals);
+  const rawMax = Math.max(...allVals);
+  const minDB  = Math.floor((rawMin - 5) / 10) * 10;
+  const maxDB  = Math.ceil((rawMax + 5) / 10) * 10;
+  const dbRange = maxDB - minDB;
+  function dbToY(db) { return padT + plotH - ((db - minDB) / dbRange) * plotH; }
+  ctx.strokeStyle = '#141414'; ctx.lineWidth = 1;
+  ctx.fillStyle = '#333'; ctx.font = '10px Courier New'; ctx.textAlign = 'right';
+  for (let db = minDB; db <= maxDB; db += 10) {
+    const y = dbToY(db);
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+    ctx.fillText(db + ' dB', padL - 4, y + 3);
+  }
+  const barW = Math.max(4, Math.floor(plotW / N) - 6);
+  const barGap = Math.floor(plotW / N);
+  bands.forEach((b, i) => {
+    const x = padL + i * barGap + Math.floor((barGap - barW) / 2);
+    const power = b.power_dbm       != null ? b.power_dbm       : minDB;
+    const noise = b.noise_floor_dbm != null ? b.noise_floor_dbm : minDB;
+    const det   = b.is_detection;
+    const noiseY = dbToY(noise);
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(x, noiseY, barW, Math.max(1, (H - padB) - noiseY));
+    const sigY = dbToY(power);
+    ctx.fillStyle = det ? (b.simulated ? '#884400' : '#cc1111') : (b.simulated ? '#1a4a1a' : '#007a1f');
+    ctx.fillRect(x, sigY, barW, Math.max(2, (H - padB) - sigY));
+    if (det) { ctx.fillStyle = b.simulated ? '#ffaa00' : '#ff4444'; ctx.fillRect(x, sigY, barW, 2); }
+    ctx.fillStyle = det ? (b.simulated ? '#ffaa00' : '#ff6666') : '#333';
+    ctx.font = '9px Courier New'; ctx.textAlign = 'center';
+    ctx.fillText(power.toFixed(0), x + barW / 2, Math.max(padT + 10, sigY - 3));
+    ctx.fillStyle = '#444';
+    ctx.fillText(b.label || b.band, x + barW / 2, H - padB + 14);
+  });
+  ctx.strokeStyle = '#222'; ctx.lineWidth = 1;
+  ctx.strokeRect(padL, padT, plotW, plotH);
+}
+
+// ── Alert system ───────────────────────────────────────────────────────────
+let alertActive = false;
+let alertDismissTimer = null;
+const alertedTids = new Set();
+
+function triggerAlert(threat) {
+  if (alertedTids.has(threat.id)) return;
+  alertedTids.add(threat.id);
+  alertActive = true;
+  const detail = document.getElementById('alert-detail');
+  const proto  = (threat.fp_protocol && threat.fp_protocol.length > 0) ? threat.fp_protocol : (threat.protocol || 'UNKNOWN');
+  detail.textContent = `${threat.id} | ${threat.freq_mhz.toFixed(3)} MHz | ${proto} | SNR: ${threat.snr_db.toFixed(1)} dB | SCORE: ${threat.threat_score}`;
+  document.getElementById('alert-banner').classList.add('visible');
+  const hdr = document.getElementById('header');
+  hdr.classList.remove('critical-flash');
+  void hdr.offsetWidth;
+  hdr.classList.add('critical-flash');
+  hdr.addEventListener('animationend', () => hdr.classList.remove('critical-flash'), { once: true });
+  try {
+    const actx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = actx.createOscillator();
+    const gain = actx.createGain();
+    osc.connect(gain); gain.connect(actx.destination);
+    osc.type = 'square'; osc.frequency.setValueAtTime(880, actx.currentTime);
+    gain.gain.setValueAtTime(0.15, actx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, actx.currentTime + 0.3);
+    osc.start(actx.currentTime); osc.stop(actx.currentTime + 0.3);
+  } catch (e) {}
+  clearTimeout(alertDismissTimer);
+  alertDismissTimer = setTimeout(dismissAlert, 15000);
+}
+
+function dismissAlert() {
+  alertActive = false;
+  clearTimeout(alertDismissTimer);
+  document.getElementById('alert-banner').classList.remove('visible');
+}
+window.dismissAlert = dismissAlert;
+window.triggerAlert  = triggerAlert;
+
+// ── WebSocket ──────────────────────────────────────────────────────────────
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws/live`);
+  ws.onopen  = () => { wsRetries = 0; };
+  ws.onmessage = (evt) => {
+    try {
+      const data = JSON.parse(evt.data);
+      if (data.type === 'scan_update') updateUI(data);
+    } catch (e) { console.error('WS parse error', e); }
+  };
+  ws.onclose = () => {
+    ws = null;
+    const delay = Math.min(30000, 2000 * Math.pow(1.5, wsRetries++));
+    setTimeout(connectWS, delay);
+  };
+  ws.onerror = () => { ws = null; };
+}
+
+async function pollREST() {
+  if (ws && ws.readyState === WebSocket.OPEN) { setTimeout(pollREST, 3000); return; }
+  try {
+    const r = await fetch(`${API_BASE}/api/hardware`, { cache: 'no-store' });
+    if (r.ok) updateUI(await r.json());
+  } catch (e) {}
+  setTimeout(pollREST, 2000);
+}
+
+// ── Drone Control ──────────────────────────────────────────────────────────
+let droneConnected = false;
+
+function droneLog(msg, type) {
+  const log = document.getElementById('drone-log');
+  const entry = document.createElement('div');
+  entry.className = `log-entry log-${type || 'info'}`;
+  const ts = new Date().toLocaleTimeString('en-US', { hour12: false });
+  entry.textContent = `[${ts}] ${msg}`;
+  log.insertBefore(entry, log.firstChild);
+  while (log.children.length > 20) log.removeChild(log.lastChild);
+}
+
+async function droneConnect() {
+  const ip = document.getElementById('drone-ip').value.trim() || '192.168.0.1';
+  const badge = document.getElementById('drone-conn-badge');
+  badge.textContent = 'CONNECTING...';
+  badge.className = 'drone-conn-badge';
+  droneLog(`Connecting to ${ip}...`, 'info');
+  try {
+    const r = await fetch(`${API_BASE}/api/drone/connect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip })
+    });
+    const d = await r.json();
+    if (d.status === 'ok' || d.connected) {
+      droneConnected = true;
+      badge.textContent = 'CONNECTED';
+      badge.className   = 'drone-conn-badge connected';
+      droneLog('Connected — vehicle online', 'ok');
+      droneStatusPoll();
+    } else {
+      throw new Error(d.message || 'Connection refused');
+    }
+  } catch (e) {
+    badge.textContent = 'ERROR';
+    badge.className   = 'drone-conn-badge error';
+    droneLog(`Connect failed: ${e.message}`, 'err');
+  }
+}
+
+async function droneCmd(cmd) {
+  if (!droneConnected && cmd !== 'emergency') {
+    droneLog('Not connected — connect first', 'err');
+    return;
+  }
+  droneLog(`CMD: ${cmd.toUpperCase()}`, 'info');
+  try {
+    const r = await fetch(`${API_BASE}/api/drone/command`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: cmd })
+    });
+    const d = await r.json();
+    if (d.status === 'ok') {
+      droneLog(`${cmd.toUpperCase()} acknowledged`, 'ok');
+    } else {
+      droneLog(`${cmd.toUpperCase()} failed: ${d.message || '?'}`, 'err');
+    }
+  } catch (e) {
+    droneLog(`${cmd.toUpperCase()} error: ${e.message}`, 'err');
+  }
+}
+
+async function droneStatusPoll() {
+  if (!droneConnected) return;
+  try {
+    const r = await fetch(`${API_BASE}/api/drone/status`, { cache: 'no-store' });
+    if (r.ok) {
+      const d = await r.json();
+      document.getElementById('d-state').textContent = d.state   || '--';
+      document.getElementById('d-alt').textContent   = d.altitude != null ? d.altitude.toFixed(1) + ' m' : '-- m';
+      document.getElementById('d-bat').textContent   = d.battery != null ? d.battery + '%' : '--%';
+      document.getElementById('d-gps').textContent   = d.gps     || '--';
+      document.getElementById('d-sig').textContent   = d.signal  || '--';
+      document.getElementById('d-mode').textContent  = d.mode    || '--';
+    }
+  } catch (e) {}
+  setTimeout(droneStatusPoll, 2000);
+}
+
+// ── History ────────────────────────────────────────────────────────────────
+async function fetchHistory() {
+  const limit    = document.getElementById('hist-limit').value;
+  const realOnly = document.getElementById('hist-real-only').checked;
+  try {
+    const r = await fetch(`${API_BASE}/api/history?limit=${limit}&real_only=${realOnly}`, { cache: 'no-store' });
+    if (!r.ok) return;
+    const data = await r.json();
+    renderHistory(data.records || [], data.count || 0);
+  } catch (e) {}
+}
+
+function renderHistory(records, count) {
+  const tbody = document.getElementById('history-tbody');
+  document.getElementById('hist-count').textContent = `${count} RECORDS`;
+  if (records.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="10" class="empty">No detections logged yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = records.map(r => {
+    const lvlClass = r.threat_level ? `hl-${r.threat_level}` : '';
+    const src = r.simulated ? '<span style="color:#333">[SIM]</span>' : '<span style="color:#007a1f">[REAL]</span>';
+    return `<tr>
+      <td style="color:#2a2a2a">${r.id}</td>
+      <td style="color:#3a3a3a">${fmtEastern(r.timestamp_iso)}</td>
+      <td style="color:#555">${r.band}</td>
+      <td style="color:#666">${r.freq_mhz != null ? r.freq_mhz.toFixed(3) : '--'}</td>
+      <td style="color:#555">${r.power_db  != null ? r.power_db.toFixed(1)  : '--'}</td>
+      <td style="color:#555">${r.snr_db    != null ? r.snr_db.toFixed(1)    : '--'}</td>
+      <td style="color:#444">${r.protocol || '--'}</td>
+      <td class="${lvlClass}">${r.threat_level || '--'}</td>
+      <td style="color:#555">${r.threat_score != null ? r.threat_score : '--'}</td>
+      <td>${src}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────
+window.addEventListener('load', () => {
+  connectWS();
+  setTimeout(pollREST, 2000);
+  setTimeout(fetchHistory, 3000);
+});
+window.addEventListener('resize', () => { if (lastData) drawSpectrum(lastData.bands || []); });
+setInterval(fetchHistory, 10000);
+document.getElementById('hist-limit').addEventListener('change', fetchHistory);
+document.getElementById('hist-real-only').addEventListener('change', fetchHistory);
+</script>
+</body>
+</html>
