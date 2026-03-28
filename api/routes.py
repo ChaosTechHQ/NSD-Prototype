@@ -3,7 +3,8 @@ api/routes.py — NSD v19 FastAPI Routes + Lifespan
 ChaosTech Defense LLC
 
 Endpoints:
-  GET  /                    — redirect to /app (frontend)
+  GET  /                    — redirect to /app
+  GET  /app                 — serves index.html with NSD_TOKEN injected
   WS   /ws/live             — real-time scan + threat push (500ms)
   GET  /api/health          — liveness check
   GET  /api/hardware        — full mission state + active threats
@@ -26,10 +27,11 @@ import secrets
 import logging
 import asyncio
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse, Response, RedirectResponse
+from fastapi.responses import JSONResponse, Response, RedirectResponse, HTMLResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi import _rate_limit_exceeded_handler
@@ -48,6 +50,9 @@ limiter = Limiter(key_func=get_remote_address)
 
 _VALID_MODES = {"RF_JAM", "GPS_SPOOF", "PROTOCOL", "SWARM_DISRUPT"}
 _AUDIT_LOG   = []
+
+# Path to index.html — resolved relative to this file
+_FRONTEND_HTML = Path(__file__).parent.parent / "frontend" / "index.html"
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +313,25 @@ def _register_routes(app: FastAPI):
     def root_redirect():
         return RedirectResponse(url="/app", status_code=302)
 
+    # ── Frontend — served dynamically so token can be injected ───────────
+    # NOTE: main.py must NOT mount /app as StaticFiles — this route owns it.
+    # Static assets (CSS, JS files if ever split out) can be mounted at
+    # /static separately without conflicting.
+
+    @app.get("/app", response_class=HTMLResponse)
+    @app.get("/app/", response_class=HTMLResponse)
+    def serve_frontend(request: Request):
+        try:
+            html = _FRONTEND_HTML.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Frontend not found")
+        token = request.app.state.api_token
+        # Inject token as first thing inside <head> so it's available
+        # before any other script runs.
+        injection = f'<script>window.NSD_TOKEN="{token}";</script>\n'
+        html = html.replace("<head>", "<head>\n" + injection, 1)
+        return HTMLResponse(content=html)
+
     # ── WebSocket live feed ───────────────────────────────────────────────
 
     @app.websocket("/ws/live")
@@ -347,9 +371,6 @@ def _register_routes(app: FastAPI):
         }
 
     # ── Hardware / Mission State ───────────────────────────────────────────
-    # Shape matches frontend updateUI() expectations:
-    #   hardware_ok, uptime_s, simulated, threat_count, total_detected,
-    #   threats[], bands[], cycle_time_s
 
     @app.get("/api/hardware")
     @limiter.limit("60/minute")
