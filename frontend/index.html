@@ -502,8 +502,8 @@
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;gap:8px;">
     <div class="panel-title" style="padding:0;color:#333;font-size:10px;letter-spacing:3px;">&#9632; DETECTION HISTORY LOG</div>
     <span id="hist-count"></span>
-    <a id="btn-export-csv" class="btn-export" href="/api/export" download="nsd_detections.csv">&#11015; EXPORT CSV</a>
-    <a id="btn-report-pdf" class="btn-export btn-report" href="/api/report" download>&#128196; GENERATE REPORT</a>
+    <button id="btn-export-csv" class="btn-export" onclick="downloadWithToken('/api/export','nsd_detections.csv','text/csv')">&#11015; EXPORT CSV</button>
+    <button id="btn-report-pdf" class="btn-export btn-report" onclick="downloadWithToken('/api/report','nsd_report.pdf','application/pdf')">&#128196; GENERATE REPORT</button>
   </div>
   <div id="history-controls">
     <label>SHOW
@@ -547,6 +547,54 @@ let lastData   = null;
 let ws         = null;
 let wsRetries  = 0;
 
+// ── API Token ───────────────────────────────────────────────────────────────
+let _apiToken = null;
+
+async function loadToken() {
+  try {
+    const r = await fetch(`${API_BASE}/api/token`, { cache: 'no-store' });
+    if (r.ok) {
+      const d = await r.json();
+      _apiToken = d.token || null;
+    }
+  } catch (e) {
+    // Non-localhost: token endpoint will 403 — that's fine, token stays null
+  }
+}
+
+async function downloadWithToken(path, filename, mimeType) {
+  const btn = document.getElementById(
+    path.includes('export') ? 'btn-export-csv' : 'btn-report-pdf'
+  );
+  const origText = btn.textContent;
+  btn.textContent = 'GENERATING...';
+  btn.disabled = true;
+  try {
+    const headers = {};
+    if (_apiToken) headers['X-NSD-Token'] = _apiToken;
+    const r = await fetch(`${API_BASE}${path}`, { cache: 'no-store', headers });
+    if (!r.ok) {
+      const msg = r.status === 403 ? 'AUTH FAILED — token not available' : `Server error ${r.status}`;
+      alert(`Download failed: ${msg}`);
+      return;
+    }
+    const blob = await r.blob();
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  } catch (e) {
+    alert(`Download error: ${e.message}`);
+  } finally {
+    btn.textContent = origText;
+    btn.disabled = false;
+  }
+}
+window.downloadWithToken = downloadWithToken;
+
+// ── Formatters ───────────────────────────────────────────────────────────
 function fmtEastern(isoStr) {
   if (!isoStr || isoStr === '--') return '--';
   try {
@@ -576,6 +624,7 @@ function snrClass(snr) {
   return 'snr-low';
 }
 
+// ── UI update ─────────────────────────────────────────────────────────────
 function updateUI(data) {
   lastData = data;
   const sim = data.simulated;
@@ -671,6 +720,7 @@ function updateUI(data) {
   drawSpectrum(data.bands || []);
 }
 
+// ── Spectrum ──────────────────────────────────────────────────────────────
 function drawSpectrum(bands) {
   const canvas = document.getElementById('spectrum-canvas');
   const dpr = window.devicePixelRatio || 1;
@@ -692,8 +742,6 @@ function drawSpectrum(bands) {
   const allVals   = [...allPowers, ...allNoise];
   if (allVals.length === 0) return;
 
-  // Give at least 15 dB headroom above the highest power reading
-  // and snap to nearest 10 dB grid so gridlines stay clean.
   const rawMin = Math.min(...allVals);
   const rawMax = Math.max(...allVals);
   const minDB  = Math.floor((rawMin - 5)  / 10) * 10;
@@ -702,7 +750,6 @@ function drawSpectrum(bands) {
 
   function dbToY(db) { return padT + plotH - ((db - minDB) / dbRange) * plotH; }
 
-  // Grid lines + Y-axis labels
   ctx.strokeStyle = '#141414'; ctx.lineWidth = 1;
   ctx.fillStyle = '#333'; ctx.font = '10px Courier New'; ctx.textAlign = 'right';
   for (let db = minDB; db <= maxDB; db += 10) {
@@ -713,7 +760,7 @@ function drawSpectrum(bands) {
 
   const barW   = Math.max(4, Math.floor(plotW / N) - 6);
   const barGap = Math.floor(plotW / N);
-  const baseY  = padT + plotH;   // bottom of plot area
+  const baseY  = padT + plotH;
 
   bands.forEach((b, i) => {
     const x = padL + i * barGap + Math.floor((barGap - barW) / 2);
@@ -721,32 +768,27 @@ function drawSpectrum(bands) {
     const noise = b.noise_floor_dbm != null ? b.noise_floor_dbm : minDB;
     const det   = b.is_detection;
 
-    // Noise floor shading
     const noiseY = dbToY(noise);
     ctx.fillStyle = '#1a1a1a';
     ctx.fillRect(x, noiseY, barW, Math.max(1, baseY - noiseY));
 
-    // Signal bar — clamped so it never goes above padT
-    const sigY  = Math.max(padT, dbToY(power));
-    const sigH  = Math.max(2, baseY - sigY);
+    const sigY = Math.max(padT, dbToY(power));
+    const sigH = Math.max(2, baseY - sigY);
     ctx.fillStyle = det
       ? (b.simulated ? '#884400' : '#cc1111')
       : (b.simulated ? '#1a4a1a' : '#007a1f');
     ctx.fillRect(x, sigY, barW, sigH);
 
-    // Detection highlight cap
     if (det) {
       ctx.fillStyle = b.simulated ? '#ffaa00' : '#ff4444';
       ctx.fillRect(x, sigY, barW, 2);
     }
 
-    // Power label — always render inside plot bounds
     const labelY = Math.max(padT + 10, sigY - 3);
     ctx.fillStyle = det ? (b.simulated ? '#ffaa00' : '#ff6666') : '#333';
     ctx.font = '9px Courier New'; ctx.textAlign = 'center';
     ctx.fillText(power.toFixed(0), x + barW / 2, labelY);
 
-    // Band label below X axis
     ctx.fillStyle = '#444';
     ctx.fillText(b.label || b.band, x + barW / 2, H - padB + 14);
   });
@@ -944,6 +986,7 @@ function renderHistory(records, count) {
 
 // ── Init ───────────────────────────────────────────────────────────────────
 window.addEventListener('load', () => {
+  loadToken();         // fetch token silently; used by downloadWithToken()
   connectWS();
   setTimeout(pollREST, 2000);
   setTimeout(fetchHistory, 3000);
