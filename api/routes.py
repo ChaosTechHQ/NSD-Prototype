@@ -110,45 +110,47 @@ def _threat_to_dict(t) -> dict:
 
 
 def _build_live_frame(app: FastAPI) -> dict:
-    """Build the full live state payload sent over /ws/live."""
+    """
+    Build the scan_update payload consumed by frontend updateUI().
+
+    Field mapping (frontend expects):
+      type, timestamp, uptime_s, hardware_ok, simulated,
+      cycle_time_s, bands, threats, threat_count, total_detected
+    """
     classifier: ThreatClassifier = app.state.classifier
     scanner:    SDRScanner       = app.state.scanner
+    hw_ok = scanner.hardware_ok
+
     with state.lock:
         cache = dict(state.cache)
+
+    # Reconstruct per-band rows the frontend band table needs
+    bands = []
+    for pt in cache.get("points", []):
+        bands.append({
+            "band":            pt.get("band", ""),
+            "label":           pt.get("band", ""),
+            "protocol":        pt.get("protocol", "--"),
+            "freq_mhz":        pt.get("freq_mhz", 0),
+            "power_dbm":       pt.get("power_db", 0),
+            "noise_floor_dbm": cache.get("noise_floor_db"),
+            "snr_db":          pt.get("snr_db"),
+            "bandwidth_khz":   pt.get("bandwidth_khz"),
+            "is_detection":    pt.get("is_detection", False),
+            "simulated":       pt.get("simulated", not hw_ok),
+        })
+
     return {
-        "type": "live",
-        "status": cache["status"],
-        "timestamp": cache["timestamp"],
-        "noise_floor_db": cache["noise_floor_db"],
-        "active_band": cache.get("active_band", "UNK"),
-        "cycle_time_s": cache.get("cycle_time_s"),
-        "threats": cache.get("threats", []),
-        "threat_count": len(cache.get("threats", [])),
-        "points": cache.get("points", []),
-        "mission_state": {
-            "uptime_sec":          int(time.time() - state.start_time),
-            "threats_detected":    classifier.get_total_detected(),
-            "candidates_pending":  classifier.get_candidate_count(),
-            "active_threats":      classifier.get_threat_count(),
-            "swarms_detected":     state.swarms_detected,
-            "active_swarms":       len(state.active_swarms),
-            "threats_engaged":     state.threats_engaged,
-            "threats_neutralized": state.threats_neutralized,
-            "autonomous_actions":  state.autonomous_actions,
-            "swarms_eliminated":   state.swarms_eliminated,
-        },
-        "system_state": {
-            "active":          state.system_active,
-            "mode":            state.system_mode,
-            "power_level":     100,
-            "energy_reserves": 100,
-        },
-        "autonomous_mode": {
-            "enabled":          state.autonomous_enabled,
-            "auto_engage":      state.auto_engage,
-            "threat_threshold": state.threat_threshold,
-        },
-        "simulated": not scanner.hardware_ok,
+        "type":           "scan_update",
+        "timestamp":      cache.get("timestamp"),
+        "uptime_s":       round(time.time() - state.start_time, 1),
+        "hardware_ok":    hw_ok,
+        "simulated":      not hw_ok,
+        "cycle_time_s":   cache.get("cycle_time_s"),
+        "bands":          bands,
+        "threats":        cache.get("threats", []),
+        "threat_count":   classifier.get_threat_count(),
+        "total_detected": classifier.get_total_detected(),
     }
 
 
@@ -181,9 +183,14 @@ async def _broadcast_loop(app: FastAPI):
         for reading in scan.bands:
             noise_readings.append(reading.noise_floor_db)
             points.append({
-                "freq_mhz": round(reading.peak_freq_hz / 1e6, 3),
-                "power_db": reading.peak_power_db,
-                "band":     reading.label,
+                "freq_mhz":     round(reading.peak_freq_hz / 1e6, 3),
+                "power_db":     reading.peak_power_db,
+                "band":         reading.label,
+                "protocol":     reading.protocol,
+                "snr_db":       reading.snr_db,
+                "bandwidth_khz": round(reading.bandwidth_hz / 1e3, 1),
+                "is_detection": reading.is_detection,
+                "simulated":    reading.simulated,
             })
             threat = classifier.process_band(reading)
             if threat is not None:
@@ -249,6 +256,10 @@ async def _lifespan(app: FastAPI):
     app.state.api_token  = api_token
 
     scanner.start()
+
+    # Wait briefly so hardware_ok reflects actual SDR init result
+    await asyncio.sleep(2.0)
+
     logger.info(f"NSD v19 started | hardware={'yes' if scanner.hardware_ok else 'sim'} "
                 f"| db={db_path}")
     if not os.getenv("NSD_API_TOKEN"):
@@ -336,45 +347,45 @@ def _register_routes(app: FastAPI):
         }
 
     # ── Hardware / Mission State ───────────────────────────────────────────
+    # Shape matches frontend updateUI() expectations:
+    #   hardware_ok, uptime_s, simulated, threat_count, total_detected,
+    #   threats[], bands[], cycle_time_s
 
     @app.get("/api/hardware")
     @limiter.limit("60/minute")
     def api_hardware(request: Request):
         classifier: ThreatClassifier = request.app.state.classifier
+        scanner:    SDRScanner       = request.app.state.scanner
+        hw_ok = scanner.hardware_ok
         with state.lock:
             cache = dict(state.cache)
+
+        bands = []
+        for pt in cache.get("points", []):
+            bands.append({
+                "band":            pt.get("band", ""),
+                "label":           pt.get("band", ""),
+                "protocol":        pt.get("protocol", "--"),
+                "freq_mhz":        pt.get("freq_mhz", 0),
+                "power_dbm":       pt.get("power_db", 0),
+                "noise_floor_dbm": cache.get("noise_floor_db"),
+                "snr_db":          pt.get("snr_db"),
+                "bandwidth_khz":   pt.get("bandwidth_khz"),
+                "is_detection":    pt.get("is_detection", False),
+                "simulated":       pt.get("simulated", not hw_ok),
+            })
+
         return {
-            "status": cache["status"],
-            "mission_state": {
-                "uptime_sec":          int(time.time() - state.start_time),
-                "threats_detected":    classifier.get_total_detected(),
-                "candidates_pending":  classifier.get_candidate_count(),
-                "active_threats":      classifier.get_threat_count(),
-                "swarms_detected":     state.swarms_detected,
-                "active_swarms":       len(state.active_swarms),
-                "threats_engaged":     state.threats_engaged,
-                "threats_neutralized": state.threats_neutralized,
-                "autonomous_actions":  state.autonomous_actions,
-                "swarms_eliminated":   state.swarms_eliminated,
-            },
-            "threats":        cache.get("threats", []),
-            "threat_count":   len(cache.get("threats", [])),
-            "noise_floor_db": cache["noise_floor_db"],
+            "type":           "scan_update",
+            "hardware_ok":    hw_ok,
+            "simulated":      not hw_ok,
+            "uptime_s":       round(time.time() - state.start_time, 1),
             "cycle_time_s":   cache.get("cycle_time_s"),
-            "system_state": {
-                "active":          state.system_active,
-                "mode":            state.system_mode,
-                "power_level":     100,
-                "energy_reserves": 100,
-            },
-            "autonomous_mode": {
-                "enabled":          state.autonomous_enabled,
-                "auto_engage":      state.auto_engage,
-                "threat_threshold": state.threat_threshold,
-            },
-            "active_band": cache.get("active_band", "UNK"),
-            "timestamp":   cache["timestamp"],
-            "simulated":   not request.app.state.scanner.hardware_ok,
+            "bands":          bands,
+            "threats":        cache.get("threats", []),
+            "threat_count":   classifier.get_threat_count(),
+            "total_detected": classifier.get_total_detected(),
+            "status":         cache["status"],
         }
 
     # ── PSD Scan (legacy compat) ───────────────────────────────────────────
@@ -415,13 +426,15 @@ def _register_routes(app: FastAPI):
 
     @app.get("/api/history")
     @limiter.limit("20/minute")
-    def api_history(request: Request):
+    def api_history(request: Request,
+                    limit:     int  = 100,
+                    real_only: bool = False):
+        limit = max(1, min(limit, 1000))
         db: SignalDB = request.app.state.db
-        records = db.get_recent(limit=100)
-        threats = db.get_recent(limit=100, real_only=True)
+        records = db.get_recent(limit=limit, real_only=real_only)
         return {
-            "scans":   [r.to_dict() for r in records],
-            "threats": [r.to_dict() for r in threats],
+            "count":   len(records),
+            "records": [r.to_dict() for r in records],
         }
 
     # ── Stats ─────────────────────────────────────────────────────────────
