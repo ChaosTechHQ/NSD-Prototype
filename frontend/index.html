@@ -502,8 +502,8 @@
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;gap:8px;">
     <div class="panel-title" style="padding:0;color:#333;font-size:10px;letter-spacing:3px;">&#9632; DETECTION HISTORY LOG</div>
     <span id="hist-count"></span>
-    <a id="btn-export-csv" class="btn-export" href="/api/export/csv" download="nsd_detections.csv">&#11015; EXPORT CSV</a>
-    <a id="btn-report-pdf" class="btn-export btn-report" href="/api/report/pdf" download>&#128196; GENERATE REPORT</a>
+    <a id="btn-export-csv" class="btn-export" href="/api/export" download="nsd_detections.csv">&#11015; EXPORT CSV</a>
+    <a id="btn-report-pdf" class="btn-export btn-report" href="/api/report" download>&#128196; GENERATE REPORT</a>
   </div>
   <div id="history-controls">
     <label>SHOW
@@ -683,19 +683,26 @@ function drawSpectrum(bands) {
   ctx.clearRect(0, 0, W, H);
   if (!bands || bands.length === 0) return;
   const N = bands.length;
-  const padL = 52, padR = 10, padT = 10, padB = 28;
+  const padL = 52, padR = 10, padT = 14, padB = 28;
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
+
   const allPowers = bands.map(b => b.power_dbm).filter(v => v != null);
   const allNoise  = bands.map(b => b.noise_floor_dbm).filter(v => v != null);
   const allVals   = [...allPowers, ...allNoise];
   if (allVals.length === 0) return;
+
+  // Give at least 15 dB headroom above the highest power reading
+  // and snap to nearest 10 dB grid so gridlines stay clean.
   const rawMin = Math.min(...allVals);
   const rawMax = Math.max(...allVals);
-  const minDB  = Math.floor((rawMin - 5) / 10) * 10;
-  const maxDB  = Math.ceil((rawMax + 5) / 10) * 10;
+  const minDB  = Math.floor((rawMin - 5)  / 10) * 10;
+  const maxDB  = Math.ceil ((rawMax + 15) / 10) * 10;
   const dbRange = maxDB - minDB;
+
   function dbToY(db) { return padT + plotH - ((db - minDB) / dbRange) * plotH; }
+
+  // Grid lines + Y-axis labels
   ctx.strokeStyle = '#141414'; ctx.lineWidth = 1;
   ctx.fillStyle = '#333'; ctx.font = '10px Courier New'; ctx.textAlign = 'right';
   for (let db = minDB; db <= maxDB; db += 10) {
@@ -703,26 +710,47 @@ function drawSpectrum(bands) {
     ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
     ctx.fillText(db + ' dB', padL - 4, y + 3);
   }
-  const barW = Math.max(4, Math.floor(plotW / N) - 6);
+
+  const barW   = Math.max(4, Math.floor(plotW / N) - 6);
   const barGap = Math.floor(plotW / N);
+  const baseY  = padT + plotH;   // bottom of plot area
+
   bands.forEach((b, i) => {
     const x = padL + i * barGap + Math.floor((barGap - barW) / 2);
     const power = b.power_dbm       != null ? b.power_dbm       : minDB;
     const noise = b.noise_floor_dbm != null ? b.noise_floor_dbm : minDB;
     const det   = b.is_detection;
+
+    // Noise floor shading
     const noiseY = dbToY(noise);
     ctx.fillStyle = '#1a1a1a';
-    ctx.fillRect(x, noiseY, barW, Math.max(1, (H - padB) - noiseY));
-    const sigY = dbToY(power);
-    ctx.fillStyle = det ? (b.simulated ? '#884400' : '#cc1111') : (b.simulated ? '#1a4a1a' : '#007a1f');
-    ctx.fillRect(x, sigY, barW, Math.max(2, (H - padB) - sigY));
-    if (det) { ctx.fillStyle = b.simulated ? '#ffaa00' : '#ff4444'; ctx.fillRect(x, sigY, barW, 2); }
+    ctx.fillRect(x, noiseY, barW, Math.max(1, baseY - noiseY));
+
+    // Signal bar — clamped so it never goes above padT
+    const sigY  = Math.max(padT, dbToY(power));
+    const sigH  = Math.max(2, baseY - sigY);
+    ctx.fillStyle = det
+      ? (b.simulated ? '#884400' : '#cc1111')
+      : (b.simulated ? '#1a4a1a' : '#007a1f');
+    ctx.fillRect(x, sigY, barW, sigH);
+
+    // Detection highlight cap
+    if (det) {
+      ctx.fillStyle = b.simulated ? '#ffaa00' : '#ff4444';
+      ctx.fillRect(x, sigY, barW, 2);
+    }
+
+    // Power label — always render inside plot bounds
+    const labelY = Math.max(padT + 10, sigY - 3);
     ctx.fillStyle = det ? (b.simulated ? '#ffaa00' : '#ff6666') : '#333';
     ctx.font = '9px Courier New'; ctx.textAlign = 'center';
-    ctx.fillText(power.toFixed(0), x + barW / 2, Math.max(padT + 10, sigY - 3));
+    ctx.fillText(power.toFixed(0), x + barW / 2, labelY);
+
+    // Band label below X axis
     ctx.fillStyle = '#444';
     ctx.fillText(b.label || b.band, x + barW / 2, H - padB + 14);
   });
+
   ctx.strokeStyle = '#222'; ctx.lineWidth = 1;
   ctx.strokeRect(padL, padT, plotW, plotH);
 }
