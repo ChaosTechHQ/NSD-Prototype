@@ -2,3 +2,36 @@ __pycache__/
 *.pyc
 .env
 *.log
+
+# Logs
+*.log
+*.log.*
+
+# Databases
+*.db
+*.sqlite*
+
+# TLS keys/certs
+*.pem
+*.key
+*.crt
+*.cer
+certs/
+
+# Backups
+*.bak
+*backup_*
+*.~
+
+# IDE/editor
+.vscode/
+.idea/
+*.swp
+
+# OS junk
+Thumbs.db
+DS_Store
+favicon.ico
+
+# Drone data (add more as needed)
+drone_data/
