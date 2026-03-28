@@ -7,6 +7,7 @@ created in the lifespan context and attached to app.state. Routes
 access them via request.app.state. Zero module-level singletons.
 
 Endpoints:
+  GET  /                    — redirect to /app (frontend)
   GET  /api/health          — liveness check
   GET  /api/hardware        — full mission state + active threats
   GET  /api/psd_scan        — latest PSD frame (legacy compat)
@@ -22,7 +23,6 @@ Endpoints:
 """
 
 import os
-import sys
 import time
 import secrets
 import logging
@@ -31,7 +31,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, RedirectResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi import _rate_limit_exceeded_handler
@@ -48,8 +48,8 @@ logger = logging.getLogger("nsd.api")
 
 limiter = Limiter(key_func=get_remote_address)
 
-_VALID_MODES   = {"RF_JAM", "GPS_SPOOF", "PROTOCOL", "SWARM_DISRUPT"}
-_AUDIT_LOG     = []
+_VALID_MODES = {"RF_JAM", "GPS_SPOOF", "PROTOCOL", "SWARM_DISRUPT"}
+_AUDIT_LOG   = []
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +90,6 @@ def _sanitize_threshold(val) -> int:
 
 
 def _threat_to_dict(t) -> dict:
-    """Serialize a ThreatObject to a JSON-safe dict."""
     return {
         "id":              t.id,
         "band":            t.band_name,
@@ -114,8 +113,6 @@ def _threat_to_dict(t) -> dict:
 
 # ---------------------------------------------------------------------------
 # Background broadcast loop
-# Runs as an asyncio task; polls SDRScanner, feeds ThreatClassifier + SignalDB,
-# keeps NSDState.cache updated for all routes to read.
 # ---------------------------------------------------------------------------
 
 async def _broadcast_loop(app: FastAPI):
@@ -141,22 +138,15 @@ async def _broadcast_loop(app: FastAPI):
         noise_readings = []
 
         for reading in scan.bands:
-            # Update NSDState cache per band
             noise_readings.append(reading.noise_floor_db)
-
-            # Build PSD points from band readings for legacy /api/psd_scan
             points.append({
-                "freq_mhz":  round(reading.peak_freq_hz / 1e6, 3),
-                "power_db":  reading.peak_power_db,
-                "band":      reading.label,
+                "freq_mhz": round(reading.peak_freq_hz / 1e6, 3),
+                "power_db": reading.peak_power_db,
+                "band":     reading.label,
             })
-
-            # Run threat classifier
             threat = classifier.process_band(reading)
             if threat is not None:
                 threats.append(threat)
-
-                # Log to DB once per threat ID (not on every refresh)
                 if threat.id not in logged_threat_ids:
                     logged_threat_ids.add(threat.id)
                     db.log_detection(
@@ -172,7 +162,6 @@ async def _broadcast_loop(app: FastAPI):
                         simulated=threat.simulated,
                     )
 
-        # Prune logged IDs to active threats only (prevent unbounded growth)
         active_ids = {t.id for t in classifier.get_active_threats()}
         logged_threat_ids &= active_ids
 
@@ -200,7 +189,7 @@ async def _broadcast_loop(app: FastAPI):
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    # ── Startup ──────────────────────────────────────────────────────────
+    # ── Startup ─────────────────────────────────────────────────────────
     api_token = os.getenv("NSD_API_TOKEN") or secrets.token_hex(16)
     db_path   = os.getenv(
         "NSD_DB_PATH",
@@ -261,6 +250,12 @@ def create_app() -> FastAPI:
 
 def _register_routes(app: FastAPI):
 
+    # ── Root redirect ────────────────────────────────────────────────────
+
+    @app.get("/")
+    def root_redirect():
+        return RedirectResponse(url="/app", status_code=302)
+
     # ── Health ────────────────────────────────────────────────────────────
 
     @app.get("/api/health")
@@ -271,10 +266,10 @@ def _register_routes(app: FastAPI):
             ts     = state.cache["timestamp"]
         hw = request.app.state.scanner.hardware_ok
         return {
-            "status":       "ok",
+            "status":        "ok",
             "sdr_available": hw,
-            "mode":         "hardware" if hw else "simulation",
-            "last_scan":    ts,
+            "mode":          "hardware" if hw else "simulation",
+            "last_scan":     ts,
         }
 
     # ── Hardware / Mission State ───────────────────────────────────────────
@@ -304,9 +299,9 @@ def _register_routes(app: FastAPI):
             "noise_floor_db": cache["noise_floor_db"],
             "cycle_time_s":   cache.get("cycle_time_s"),
             "system_state": {
-                "active":        state.system_active,
-                "mode":          state.system_mode,
-                "power_level":   100,
+                "active":          state.system_active,
+                "mode":            state.system_mode,
+                "power_level":     100,
                 "energy_reserves": 100,
             },
             "autonomous_mode": {
@@ -328,11 +323,11 @@ def _register_routes(app: FastAPI):
                      span_mhz:   float = 2.0):
         with state.lock:
             s = state.cache["status"]
-            if s in ("starting",):
+            if s == "starting":
                 return JSONResponse(status_code=503,
                     content={"status": "starting", "error": "Scanner warming up"})
             return {
-                "center_mhz":     state.cache["center_mhz"],
+                "center_mhz":     state.cache.get("center_mhz"),
                 "noise_floor_db": state.cache["noise_floor_db"],
                 "points":         state.cache["points"],
                 "peaks":          state.cache.get("peaks", []),
@@ -355,13 +350,12 @@ def _register_routes(app: FastAPI):
             "records": [r.to_dict() for r in records],
         }
 
-    # Legacy alias
     @app.get("/api/history")
     @limiter.limit("20/minute")
     def api_history(request: Request):
         db: SignalDB = request.app.state.db
-        records  = db.get_recent(limit=100)
-        threats  = db.get_recent(limit=100, real_only=True)
+        records = db.get_recent(limit=100)
+        threats = db.get_recent(limit=100, real_only=True)
         return {
             "scans":   [r.to_dict() for r in records],
             "threats": [r.to_dict() for r in threats],
@@ -401,7 +395,7 @@ def _register_routes(app: FastAPI):
         scanner: SDRScanner = request.app.state.scanner
         with state.lock:
             cycle_s = state.cache.get("cycle_time_s") or 0.0
-        uptime  = time.time() - state.start_time
+        uptime = time.time() - state.start_time
         try:
             pdf_bytes = generate_report(
                 db=db,
