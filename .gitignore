@@ -1,4 +1,39 @@
+# NSD v19 — ChaosTech Defense LLC
+# Generated 2026-03-28
+
+# Logs — never commit runtime logs
+*.log
+
+# Backup / scratch files
+*.bak
+*.backup_*
+*.tmp
+
+# Python
 __pycache__/
 *.pyc
-.env
-*.log
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# SQLite databases — runtime data, not source
+*.db
+*.sqlite
+data/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
