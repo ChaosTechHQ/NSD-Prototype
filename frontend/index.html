@@ -547,20 +547,10 @@ let lastData   = null;
 let ws         = null;
 let wsRetries  = 0;
 
-// ── API Token ───────────────────────────────────────────────────────────────
-let _apiToken = null;
-
-async function loadToken() {
-  try {
-    const r = await fetch(`${API_BASE}/api/token`, { cache: 'no-store' });
-    if (r.ok) {
-      const d = await r.json();
-      _apiToken = d.token || null;
-    }
-  } catch (e) {
-    // Non-localhost: token endpoint will 403 — that's fine, token stays null
-  }
-}
+// ── API Token — injected by FastAPI at serve time via /app route ────────────
+// window.NSD_TOKEN is set in a <script> block prepended by routes.py.
+// Falls back to null if served directly as a static file.
+let _apiToken = (typeof window.NSD_TOKEN !== 'undefined') ? window.NSD_TOKEN : null;
 
 async function downloadWithToken(path, filename, mimeType) {
   const btn = document.getElementById(
@@ -574,7 +564,7 @@ async function downloadWithToken(path, filename, mimeType) {
     if (_apiToken) headers['X-NSD-Token'] = _apiToken;
     const r = await fetch(`${API_BASE}${path}`, { cache: 'no-store', headers });
     if (!r.ok) {
-      const msg = r.status === 403 ? 'AUTH FAILED — token not available' : `Server error ${r.status}`;
+      const msg = r.status === 403 ? 'AUTH FAILED — token missing' : `Server error ${r.status}`;
       alert(`Download failed: ${msg}`);
       return;
     }
@@ -594,7 +584,7 @@ async function downloadWithToken(path, filename, mimeType) {
 }
 window.downloadWithToken = downloadWithToken;
 
-// ── Formatters ───────────────────────────────────────────────────────────
+// ── Formatters ────────────────────────────────────────────────────────────
 function fmtEastern(isoStr) {
   if (!isoStr || isoStr === '--') return '--';
   try {
@@ -986,7 +976,6 @@ function renderHistory(records, count) {
 
 // ── Init ───────────────────────────────────────────────────────────────────
 window.addEventListener('load', () => {
-  loadToken();         // fetch token silently; used by downloadWithToken()
   connectWS();
   setTimeout(pollREST, 2000);
   setTimeout(fetchHistory, 3000);
