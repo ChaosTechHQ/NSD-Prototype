@@ -2,13 +2,8 @@
 main.py — NSD v19 Application Entrypoint
 ChaosTech Defense LLC
 
-Thin entrypoint: creates the FastAPI app, registers the lifespan
-(startup/shutdown) and all routes via api/routes.py, then starts
-Uvicorn.
-
 Run:
     python main.py
-    # or via systemd / supervisor
 
 Environment variables:
     NSD_API_TOKEN   — shared secret for write endpoints (auto-generated if unset)
@@ -23,10 +18,7 @@ import sys
 import logging
 
 import uvicorn
-from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
-from slowapi import _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
 
 # Ensure backend/ is importable regardless of cwd
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "backend"))
@@ -41,10 +33,12 @@ logging.basicConfig(
 
 app = create_app()
 
-# Serve the frontend from /
+# Mount frontend at /app — NOT at "/" so WebSocket upgrades
+# to the root path are not swallowed by StaticFiles (which
+# only handles HTTP and raises AssertionError on WS scope).
 frontend_dir = os.path.join(os.path.dirname(__file__), "frontend")
 if os.path.isdir(frontend_dir):
-    app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
+    app.mount("/app", StaticFiles(directory=frontend_dir, html=True), name="frontend")
 
 if __name__ == "__main__":
     host = os.getenv("NSD_HOST", "0.0.0.0")
