@@ -2,12 +2,9 @@
 api/routes.py — NSD v19 FastAPI Routes + Lifespan
 ChaosTech Defense LLC
 
-All application objects (SDRScanner, ThreatClassifier, SignalDB) are
-created in the lifespan context and attached to app.state. Routes
-access them via request.app.state. Zero module-level singletons.
-
 Endpoints:
   GET  /                    — redirect to /app (frontend)
+  WS   /ws/live             — real-time scan + threat push (500ms)
   GET  /api/health          — liveness check
   GET  /api/hardware        — full mission state + active threats
   GET  /api/psd_scan        — latest PSD frame (legacy compat)
@@ -23,6 +20,7 @@ Endpoints:
 """
 
 import os
+import json
 import time
 import secrets
 import logging
@@ -30,7 +28,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response, RedirectResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -108,6 +106,49 @@ def _threat_to_dict(t) -> dict:
         "confirmed_hits":  t.confirmed_hits,
         "simulated":       t.simulated,
         "timestamp":       t.timestamp,
+    }
+
+
+def _build_live_frame(app: FastAPI) -> dict:
+    """Build the full live state payload sent over /ws/live."""
+    classifier: ThreatClassifier = app.state.classifier
+    scanner:    SDRScanner       = app.state.scanner
+    with state.lock:
+        cache = dict(state.cache)
+    return {
+        "type": "live",
+        "status": cache["status"],
+        "timestamp": cache["timestamp"],
+        "noise_floor_db": cache["noise_floor_db"],
+        "active_band": cache.get("active_band", "UNK"),
+        "cycle_time_s": cache.get("cycle_time_s"),
+        "threats": cache.get("threats", []),
+        "threat_count": len(cache.get("threats", [])),
+        "points": cache.get("points", []),
+        "mission_state": {
+            "uptime_sec":          int(time.time() - state.start_time),
+            "threats_detected":    classifier.get_total_detected(),
+            "candidates_pending":  classifier.get_candidate_count(),
+            "active_threats":      classifier.get_threat_count(),
+            "swarms_detected":     state.swarms_detected,
+            "active_swarms":       len(state.active_swarms),
+            "threats_engaged":     state.threats_engaged,
+            "threats_neutralized": state.threats_neutralized,
+            "autonomous_actions":  state.autonomous_actions,
+            "swarms_eliminated":   state.swarms_eliminated,
+        },
+        "system_state": {
+            "active":          state.system_active,
+            "mode":            state.system_mode,
+            "power_level":     100,
+            "energy_reserves": 100,
+        },
+        "autonomous_mode": {
+            "enabled":          state.autonomous_enabled,
+            "auto_engage":      state.auto_engage,
+            "threat_threshold": state.threat_threshold,
+        },
+        "simulated": not scanner.hardware_ok,
     }
 
 
@@ -255,6 +296,28 @@ def _register_routes(app: FastAPI):
     @app.get("/")
     def root_redirect():
         return RedirectResponse(url="/app", status_code=302)
+
+    # ── WebSocket live feed ───────────────────────────────────────────────
+
+    @app.websocket("/ws/live")
+    async def ws_live(websocket: WebSocket):
+        await websocket.accept()
+        logger.info(f"WebSocket connected: {websocket.client}")
+        last_ts: Optional[float] = None
+        try:
+            while True:
+                with state.lock:
+                    ts = state.cache["timestamp"]
+                # Only push when data has changed
+                if ts != last_ts and ts is not None:
+                    last_ts = ts
+                    frame = _build_live_frame(websocket.app)
+                    await websocket.send_text(json.dumps(frame))
+                await asyncio.sleep(0.5)
+        except WebSocketDisconnect:
+            logger.info(f"WebSocket disconnected: {websocket.client}")
+        except Exception as e:
+            logger.warning(f"WebSocket error: {e}")
 
     # ── Health ────────────────────────────────────────────────────────────
 
