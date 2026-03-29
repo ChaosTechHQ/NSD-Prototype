@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NSD v19 — ChaosTech Defense</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><polygon points='50,5 95,50 50,95 5,50' fill='none' stroke='%23ff2222' stroke-width='8'/><polygon points='50,20 80,50 50,80 20,50' fill='none' stroke='%23888' stroke-width='5'/><line x1='50' y1='5' x2='50' y2='95' stroke='%23ff2222' stroke-width='3'/></svg>">
+<link rel="icon" type="image/png" href="chaostech-logo.png">
 <style>
   :root {
     --green:     #00ff41;
@@ -47,8 +47,8 @@
     100% { opacity: 0; pointer-events: none; }
   }
   .splash-logo {
-    width: 140px;
-    height: 140px;
+    width: 260px;
+    height: auto;
     animation: splashScale 0.6s ease;
   }
   @keyframes splashScale {
@@ -149,7 +149,7 @@
     z-index: 100;
   }
   .hdr-left { display: flex; align-items: center; gap: 12px; }
-  .hdr-logo { width: 28px; height: 28px; opacity: 0.9; }
+  .hdr-logo { height: 26px; width: auto; opacity: 0.95; }
   .hdr-title {
     color: var(--red);
     font-size: 15px;
@@ -544,19 +544,7 @@
 
 <!-- SPLASH SCREEN -->
 <div id="splash">
-  <svg class="splash-logo" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-    <defs>
-      <linearGradient id="sg1" x1="0%" y1="0%" x2="100%" y2="100%">
-        <stop offset="0%" stop-color="#aaa"/>
-        <stop offset="50%" stop-color="#eee"/>
-        <stop offset="100%" stop-color="#666"/>
-      </linearGradient>
-    </defs>
-    <polygon points="50,4 96,50 50,96 4,50" fill="none" stroke="url(#sg1)" stroke-width="7"/>
-    <polygon points="50,22 78,50 50,78 22,50" fill="none" stroke="#888" stroke-width="4"/>
-    <line x1="50" y1="4" x2="50" y2="96" stroke="#ff2222" stroke-width="2.5" opacity="0.8"/>
-    <line x1="4" y1="50" x2="96" y2="50" stroke="#ff2222" stroke-width="2.5" opacity="0.8"/>
-  </svg>
+  <img src="chaostech-logo.png" alt="ChaosTech Defense" class="splash-logo">
   <div class="splash-title">ChaosTech Defense</div>
   <div class="splash-sub">— NEURAL SPECTRUM DISRUPTOR —</div>
   <div class="splash-tagline">DETECT &nbsp;·&nbsp; CLASSIFY &nbsp;·&nbsp; NEUTRALIZE</div>
@@ -595,11 +583,7 @@
 <!-- HEADER -->
 <div id="header">
   <div class="hdr-left">
-    <svg class="hdr-logo" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-      <polygon points="50,4 96,50 50,96 4,50" fill="none" stroke="#cc2222" stroke-width="8"/>
-      <polygon points="50,24 76,50 50,76 24,50" fill="none" stroke="#666" stroke-width="5"/>
-      <line x1="50" y1="4" x2="50" y2="96" stroke="#ff2222" stroke-width="3"/>
-    </svg>
+    <img src="chaostech-logo.png" alt="ChaosTech Defense" class="hdr-logo">
     <div class="hdr-title">&#9632; NSD v19 — Neuro Swarm Disruptor</div>
   </div>
   <div class="hdr-right">
