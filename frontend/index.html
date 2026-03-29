@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NSD v19 — ChaosTech Defense</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><polygon points='50,5 95,50 50,95 5,50' fill='none' stroke='%23ff2222' stroke-width='8'/><polygon points='50,20 80,50 50,80 20,50' fill='none' stroke='%23888' stroke-width='5'/><line x1='50' y1='5' x2='50' y2='95' stroke='%23ff2222' stroke-width='3'/></svg>">
 <style>
   :root {
     --green:     #00ff41;
@@ -26,6 +27,76 @@
     font-family: var(--font);
     font-size: 13px;
     min-height: 100vh;
+  }
+
+  /* ── SPLASH SCREEN ── */
+  #splash {
+    position: fixed;
+    inset: 0;
+    background: #000;
+    z-index: 99999;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+    animation: splashFadeOut 0.6s ease 3.2s forwards;
+  }
+  @keyframes splashFadeOut {
+    0%   { opacity: 1; pointer-events: all; }
+    100% { opacity: 0; pointer-events: none; }
+  }
+  .splash-logo {
+    width: 140px;
+    height: 140px;
+    animation: splashScale 0.6s ease;
+  }
+  @keyframes splashScale {
+    from { transform: scale(0.6); opacity: 0; }
+    to   { transform: scale(1);   opacity: 1; }
+  }
+  .splash-title {
+    font-size: 28px;
+    font-weight: bold;
+    letter-spacing: 8px;
+    color: #fff;
+    text-transform: uppercase;
+    animation: splashScale 0.6s ease 0.2s both;
+  }
+  .splash-sub {
+    font-size: 13px;
+    letter-spacing: 5px;
+    color: #888;
+    animation: splashScale 0.6s ease 0.4s both;
+  }
+  .splash-tagline {
+    font-size: 11px;
+    letter-spacing: 3px;
+    color: var(--red);
+    animation: splashScale 0.6s ease 0.6s both;
+  }
+  .splash-bar {
+    width: 280px;
+    height: 2px;
+    background: #111;
+    border-radius: 2px;
+    overflow: hidden;
+    animation: splashScale 0.3s ease 1s both;
+  }
+  .splash-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--red), var(--orange));
+    animation: splashLoad 2s ease 1s both;
+  }
+  @keyframes splashLoad {
+    from { width: 0%; }
+    to   { width: 100%; }
+  }
+  .splash-status {
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: #333;
+    animation: splashScale 0.3s ease 1s both;
   }
 
   /* ── CRITICAL ALERT BANNER ── */
@@ -77,6 +148,8 @@
     top: 0;
     z-index: 100;
   }
+  .hdr-left { display: flex; align-items: center; gap: 12px; }
+  .hdr-logo { width: 28px; height: 28px; opacity: 0.9; }
   .hdr-title {
     color: var(--red);
     font-size: 15px;
@@ -84,7 +157,7 @@
     letter-spacing: 3px;
     text-transform: uppercase;
   }
-  .hdr-right { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .hdr-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   #mode-badge {
     padding: 3px 12px;
     border-radius: 3px;
@@ -95,6 +168,97 @@
   .mode-live { background: #002200; color: var(--green); border: 1px solid var(--green); }
   .mode-sim  { background: #332200; color: var(--yellow); border: 1px solid var(--yellow); }
   #uptime { color: #666; font-size: 12px; letter-spacing: 1px; }
+
+  /* ── SIM DEMO BUTTON ── */
+  #demo-btn {
+    background: var(--orange);
+    color: #fff;
+    border: 2px solid #ff4400;
+    padding: 5px 16px;
+    font-family: var(--font);
+    font-size: 12px;
+    font-weight: bold;
+    letter-spacing: 2px;
+    border-radius: 6px;
+    cursor: pointer;
+    box-shadow: 0 0 10px #ff440066;
+    animation: demoGlow 2s infinite;
+  }
+  #demo-btn:hover { background: #ff6600; box-shadow: 0 0 20px #ff4400; }
+  @keyframes demoGlow {
+    0%,100% { box-shadow: 0 0 8px #ff440066; }
+    50%     { box-shadow: 0 0 18px #ff440099; }
+  }
+
+  /* ── FULLSCREEN BUTTON ── */
+  #fs-btn {
+    background: #111;
+    color: #444;
+    border: 1px solid #222;
+    padding: 5px 10px;
+    font-family: var(--font);
+    font-size: 13px;
+    border-radius: 4px;
+    cursor: pointer;
+    line-height: 1;
+  }
+  #fs-btn:hover { color: var(--green); border-color: var(--green-dim); }
+
+  /* ── DEMO CONSOLE ── */
+  #demo-console {
+    display: none;
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    background: #000;
+    color: var(--green);
+    padding: 14px 20px;
+    font-family: var(--font);
+    border-top: 3px solid var(--red);
+    z-index: 9998;
+    font-size: 13px;
+    line-height: 1.6;
+    max-height: 160px;
+    overflow-y: auto;
+    box-shadow: 0 -4px 30px #ff000033;
+  }
+  #demo-console.active { display: block; }
+  .demo-log-line { color: var(--green); }
+  .demo-log-line.warn { color: var(--red); font-weight: bold; }
+  .demo-log-line.ok   { color: #00ff41; }
+
+  /* ── NEUTRALIZE OVERLAY ── */
+  #neutralize-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.85);
+    z-index: 10000;
+    align-items: center;
+    justify-content: center;
+  }
+  #neutralize-overlay.active { display: flex; }
+  #neutralize-box {
+    text-align: center;
+    border: 5px solid var(--red);
+    border-radius: 20px;
+    padding: 40px 60px;
+    background: #1a0000;
+    box-shadow: 0 0 80px #ff000066;
+    animation: neutralizePulse 0.8s infinite;
+    font-family: var(--font);
+  }
+  @keyframes neutralizePulse {
+    0%,100% { box-shadow: 0 0 60px #ff000066; transform: scale(1); }
+    50%     { box-shadow: 0 0 100px #ff0000aa; transform: scale(1.02); }
+  }
+  .n-threat-id   { font-size: 16px; color: #aaa; letter-spacing: 4px; margin-bottom: 12px; }
+  .n-label       { font-size: 72px; font-weight: bold; color: var(--red); letter-spacing: 8px; text-shadow: 0 0 30px #ff0000; margin: 16px 0; }
+  .n-confidence  { font-size: 18px; color: var(--orange); letter-spacing: 2px; margin-bottom: 20px; }
+  .n-timeline    { display: flex; gap: 8px; align-items: center; justify-content: center; font-size: 11px; letter-spacing: 2px; color: #444; margin-top: 16px; }
+  .n-timeline .step         { padding: 4px 10px; border: 1px solid #333; border-radius: 3px; }
+  .n-timeline .step.done    { color: var(--green); border-color: var(--green-dim); }
+  .n-timeline .step.active  { color: var(--red); border-color: var(--red); animation: blink 0.5s step-end infinite; }
+  .n-timeline .arrow        { color: #333; }
 
   /* ── STATS BAR ── */
   #stats-bar {
@@ -378,6 +542,28 @@
 </head>
 <body>
 
+<!-- SPLASH SCREEN -->
+<div id="splash">
+  <svg class="splash-logo" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="sg1" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#aaa"/>
+        <stop offset="50%" stop-color="#eee"/>
+        <stop offset="100%" stop-color="#666"/>
+      </linearGradient>
+    </defs>
+    <polygon points="50,4 96,50 50,96 4,50" fill="none" stroke="url(#sg1)" stroke-width="7"/>
+    <polygon points="50,22 78,50 50,78 22,50" fill="none" stroke="#888" stroke-width="4"/>
+    <line x1="50" y1="4" x2="50" y2="96" stroke="#ff2222" stroke-width="2.5" opacity="0.8"/>
+    <line x1="4" y1="50" x2="96" y2="50" stroke="#ff2222" stroke-width="2.5" opacity="0.8"/>
+  </svg>
+  <div class="splash-title">ChaosTech Defense</div>
+  <div class="splash-sub">— NEURAL SPECTRUM DISRUPTOR —</div>
+  <div class="splash-tagline">DETECT &nbsp;·&nbsp; CLASSIFY &nbsp;·&nbsp; NEUTRALIZE</div>
+  <div class="splash-bar"><div class="splash-bar-fill"></div></div>
+  <div class="splash-status">INITIALIZING NSD v19...</div>
+</div>
+
 <!-- CRITICAL ALERT BANNER -->
 <div id="alert-banner">
   <span class="alert-icon">&#9888;</span>
@@ -388,11 +574,38 @@
   <button class="alert-dismiss" onclick="dismissAlert()">DISMISS</button>
 </div>
 
+<!-- NEUTRALIZE OVERLAY -->
+<div id="neutralize-overlay">
+  <div id="neutralize-box">
+    <div class="n-threat-id" id="n-tid">THREAT #DEMO-001</div>
+    <div class="n-label">NEUTRALIZE</div>
+    <div class="n-confidence" id="n-conf">Threat Confidence: 87%</div>
+    <div class="n-timeline">
+      <span class="step done" id="ns1">DETECTED</span>
+      <span class="arrow">→</span>
+      <span class="step done" id="ns2">CLASSIFIED</span>
+      <span class="arrow">→</span>
+      <span class="step active" id="ns3">ENGAGED</span>
+      <span class="arrow">→</span>
+      <span class="step" id="ns4">NEUTRALIZED</span>
+    </div>
+  </div>
+</div>
+
 <!-- HEADER -->
 <div id="header">
-  <div class="hdr-title">&#9632; NSD v19 — Neuro Swarm Disruptor</div>
+  <div class="hdr-left">
+    <svg class="hdr-logo" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+      <polygon points="50,4 96,50 50,96 4,50" fill="none" stroke="#cc2222" stroke-width="8"/>
+      <polygon points="50,24 76,50 50,76 24,50" fill="none" stroke="#666" stroke-width="5"/>
+      <line x1="50" y1="4" x2="50" y2="96" stroke="#ff2222" stroke-width="3"/>
+    </svg>
+    <div class="hdr-title">&#9632; NSD v19 — Neuro Swarm Disruptor</div>
+  </div>
   <div class="hdr-right">
     <div id="mode-badge" class="mode-badge mode-sim">SIM MODE</div>
+    <button id="demo-btn" onclick="demoMode()">&#128640; SIM DEMO</button>
+    <button id="fs-btn" onclick="toggleFullscreen()" title="Fullscreen">&#x26F6;</button>
     <div id="uptime">UPTIME: --:--:--</div>
   </div>
 </div>
@@ -541,17 +754,121 @@
   </div>
 </div>
 
+<!-- DEMO CONSOLE -->
+<div id="demo-console"></div>
+
 <script>
 const API_BASE = window.location.origin;
 let lastData   = null;
 let ws         = null;
 let wsRetries  = 0;
 
-// ── API Token — injected by FastAPI at serve time via /app route ────────────
-// window.NSD_TOKEN is set in a <script> block prepended by routes.py.
-// Falls back to null if served directly as a static file.
 let _apiToken = (typeof window.NSD_TOKEN !== 'undefined') ? window.NSD_TOKEN : null;
 
+// ── Fullscreen ─────────────────────────────────────────────────────────────
+function toggleFullscreen() {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen().catch(() => {});
+    document.getElementById('fs-btn').textContent = '\u2715';
+  } else {
+    document.exitFullscreen();
+    document.getElementById('fs-btn').textContent = '\u26F6';
+  }
+}
+window.toggleFullscreen = toggleFullscreen;
+
+// ── SIM DEMO ───────────────────────────────────────────────────────────────
+let demoActive = false;
+
+function demoMode() {
+  if (demoActive) return;
+  demoActive = true;
+  const btn = document.getElementById('demo-btn');
+  btn.textContent = '⏳ RUNNING...';
+  btn.disabled = true;
+
+  const cons = document.getElementById('demo-console');
+  cons.innerHTML = '';
+  cons.classList.add('active');
+
+  const log = (msg, type) => {
+    const line = document.createElement('div');
+    line.className = 'demo-log-line' + (type ? ' ' + type : '');
+    line.textContent = new Date().toLocaleTimeString('en-US', { hour12: false }) + '  |  ' + msg;
+    cons.appendChild(line);
+    cons.scrollTop = cons.scrollHeight;
+  };
+
+  log('🚀 DEMO MODE ACTIVATED — NSD v19 threat lifecycle simulation');
+  setTimeout(() => log('📡 Baseline established — facility perimeter nominal'), 1500);
+  setTimeout(() => log('📡 Monitoring: 433MHz LoRa | 868MHz ELRS | 915MHz MAVLink | 2.4GHz DJI | 5.8GHz FPV'), 2500);
+
+  setTimeout(() => {
+    log('🔴 ALERT: Swarm signature detected — 2.4GHz DJI OcuSync', 'warn');
+    log('🔴 CLASSIFYING: SNR +24.8dB | BW 10.5MHz | Score 87 → CRITICAL', 'warn');
+    document.getElementById('header').classList.remove('critical-flash');
+    void document.getElementById('header').offsetWidth;
+    document.getElementById('header').classList.add('critical-flash');
+    document.getElementById('alert-detail').textContent = 'DEMO-001 | 2437.000 MHz | DJI OcuSync Swarm | SNR +24.8dB | SCORE: 87';
+    document.getElementById('alert-banner').classList.add('visible');
+
+    const tlist = document.getElementById('threat-list');
+    tlist.innerHTML = `
+      <div class="threat-card tc-CRITICAL" data-tid="DEMO-001">
+        <div class="tc-header">
+          <span class="tc-id">DEMO-001</span>
+          <span class="tc-level-CRITICAL">CRITICAL [DEMO]</span>
+        </div>
+        <div class="tc-freq">2437.000 MHz</div>
+        <div class="tc-proto">DJI OcuSync Swarm Control <span style="font-size:0.7em;color:#00cc44;border:1px solid #00cc44;padding:1px 4px;border-radius:2px">HIGH 87%</span></div>
+        <div class="tc-detail">
+          <span>PWR: -41.2 dBm</span><span>SNR: +24.8 dB</span><span>BW: 10.5 MHz</span><span>SCORE: 87</span>
+        </div>
+        <div class="tc-bar-bg"><div class="tc-bar-fill" style="width:87%;background:#ff2222"></div></div>
+      </div>`;
+  }, 5000);
+
+  setTimeout(() => {
+    log('⚡ AUTONOMOUS MODE: Intercept drone armed — airborne in 3s');
+    document.getElementById('n-tid').textContent = 'THREAT #DEMO-001';
+    document.getElementById('n-conf').textContent = 'Threat Confidence: 87% | DJI OcuSync Swarm';
+    document.getElementById('ns3').className = 'step active';
+    document.getElementById('ns4').className = 'step';
+    document.getElementById('neutralize-overlay').classList.add('active');
+  }, 12000);
+
+  setTimeout(() => {
+    log('✅ THREAT NEUTRALIZED — 12.4 seconds response time', 'ok');
+    log('✅ Facility perimeter secured | Incident logged', 'ok');
+    document.getElementById('ns3').className = 'step done';
+    document.getElementById('ns4').className = 'step done';
+    setTimeout(() => {
+      document.getElementById('neutralize-overlay').classList.remove('active');
+      const tlist = document.getElementById('threat-list');
+      tlist.innerHTML = '<div style="padding:24px;text-align:center;color:#00ff41;font-size:16px;letter-spacing:2px;">✅ FACILITY SECURE<br><span style="font-size:11px;color:#555;margin-top:8px;display:block;">All threats neutralized — 12.4s response</span></div>';
+      document.getElementById('alert-banner').classList.remove('visible');
+    }, 2500);
+  }, 20000);
+
+  setTimeout(() => {
+    log('📊 Demo complete — ready for next run');
+    cons.classList.remove('active');
+    demoActive = false;
+    btn.textContent = '🚀 SIM DEMO';
+    btn.disabled = false;
+  }, 26000);
+}
+window.demoMode = demoMode;
+
+// ── Splash removal ─────────────────────────────────────────────────────────
+window.addEventListener('load', () => {
+  setTimeout(() => {
+    const s = document.getElementById('splash');
+    if (s) s.remove();
+  }, 3800);
+});
+
+// ── Download with token ────────────────────────────────────────────────────
 async function downloadWithToken(path, filename, mimeType) {
   const btn = document.getElementById(
     path.includes('export') ? 'btn-export-csv' : 'btn-report-pdf'
@@ -653,58 +970,60 @@ function updateUI(data) {
     tbody.innerHTML = '<tr><td colspan="8" class="empty">No band data.</td></tr>';
   }
 
-  const tlist = document.getElementById('threat-list');
-  if (data.threats && data.threats.length > 0) {
-    const sorted = [...data.threats].sort((a, b) => b.threat_score - a.threat_score);
-    const incomingIds = new Set(sorted.map(t => t.id));
-    tlist.querySelectorAll('.threat-card').forEach(el => {
-      if (!incomingIds.has(el.dataset.tid)) el.remove();
-    });
-    sorted.forEach(t => {
-      const col = levelColor(t.threat_level);
-      const simTag = t.simulated ? ' <span class="sim-tag">[SIM]</span>' : '';
-      let card = tlist.querySelector(`.threat-card[data-tid="${t.id}"]`);
-      if (!card) {
-        card = document.createElement('div');
+  if (!demoActive) {
+    const tlist = document.getElementById('threat-list');
+    if (data.threats && data.threats.length > 0) {
+      const sorted = [...data.threats].sort((a, b) => b.threat_score - a.threat_score);
+      const incomingIds = new Set(sorted.map(t => t.id));
+      tlist.querySelectorAll('.threat-card').forEach(el => {
+        if (!incomingIds.has(el.dataset.tid)) el.remove();
+      });
+      sorted.forEach(t => {
+        const col = levelColor(t.threat_level);
+        const simTag = t.simulated ? ' <span class="sim-tag">[SIM]</span>' : '';
+        let card = tlist.querySelector(`.threat-card[data-tid="${t.id}"]`);
+        if (!card) {
+          card = document.createElement('div');
+          card.className = `threat-card tc-${t.threat_level}`;
+          card.dataset.tid = t.id;
+          card.innerHTML = `
+            <div class="tc-header">
+              <span class="tc-id">${t.id}</span>
+              <span class="tc-level" data-field="level"></span>
+            </div>
+            <div class="tc-freq" data-field="freq"></div>
+            <div class="tc-proto" data-field="proto"></div>
+            <div class="tc-detail" data-field="detail"></div>
+            <div class="tc-bar-bg"><div class="tc-bar-fill" data-field="bar"></div></div>`;
+          tlist.insertBefore(card, tlist.firstChild);
+        }
+        const lvlEl = card.querySelector('[data-field="level"]');
+        lvlEl.className = `tc-level-${t.threat_level}`;
+        lvlEl.innerHTML = `${t.threat_level}${simTag}`;
+        card.querySelector('[data-field="freq"]').textContent = `${t.freq_mhz.toFixed(3)} MHz`;
+        const protoEl = card.querySelector('[data-field="proto"]');
+        if (t.fp_protocol && t.fp_protocol.length > 0) {
+          const confColor = t.fp_confidence === 'HIGH' ? '#00cc44' : t.fp_confidence === 'MEDIUM' ? '#f0a500' : '#888';
+          protoEl.innerHTML = `${t.fp_protocol} <span style="font-size:0.7em;color:${confColor};border:1px solid ${confColor};padding:1px 4px;border-radius:2px">${t.fp_confidence || '?'} ${t.fp_conf_pct || 0}%</span>`;
+        } else {
+          protoEl.textContent = t.protocol;
+        }
+        card.querySelector('[data-field="detail"]').innerHTML =
+          `<span>PWR: ${t.power_dbm.toFixed(1)} dBm</span>` +
+          `<span>SNR: ${t.snr_db.toFixed(1)} dB</span>` +
+          `<span>BW: ${t.bandwidth_khz.toFixed(0)} kHz</span>` +
+          `<span>SCORE: ${t.threat_score}</span>`;
+        const bar = card.querySelector('[data-field="bar"]');
+        bar.style.width      = `${t.threat_score}%`;
+        bar.style.background = col;
         card.className = `threat-card tc-${t.threat_level}`;
-        card.dataset.tid = t.id;
-        card.innerHTML = `
-          <div class="tc-header">
-            <span class="tc-id">${t.id}</span>
-            <span class="tc-level" data-field="level"></span>
-          </div>
-          <div class="tc-freq" data-field="freq"></div>
-          <div class="tc-proto" data-field="proto"></div>
-          <div class="tc-detail" data-field="detail"></div>
-          <div class="tc-bar-bg"><div class="tc-bar-fill" data-field="bar"></div></div>`;
-        tlist.insertBefore(card, tlist.firstChild);
-      }
-      const lvlEl = card.querySelector('[data-field="level"]');
-      lvlEl.className = `tc-level-${t.threat_level}`;
-      lvlEl.innerHTML = `${t.threat_level}${simTag}`;
-      card.querySelector('[data-field="freq"]').textContent = `${t.freq_mhz.toFixed(3)} MHz`;
-      const protoEl = card.querySelector('[data-field="proto"]');
-      if (t.fp_protocol && t.fp_protocol.length > 0) {
-        const confColor = t.fp_confidence === 'HIGH' ? '#00cc44' : t.fp_confidence === 'MEDIUM' ? '#f0a500' : '#888';
-        protoEl.innerHTML = `${t.fp_protocol} <span style="font-size:0.7em;color:${confColor};border:1px solid ${confColor};padding:1px 4px;border-radius:2px">${t.fp_confidence || '?'} ${t.fp_conf_pct || 0}%</span>`;
-      } else {
-        protoEl.textContent = t.protocol;
-      }
-      card.querySelector('[data-field="detail"]').innerHTML =
-        `<span>PWR: ${t.power_dbm.toFixed(1)} dBm</span>` +
-        `<span>SNR: ${t.snr_db.toFixed(1)} dB</span>` +
-        `<span>BW: ${t.bandwidth_khz.toFixed(0)} kHz</span>` +
-        `<span>SCORE: ${t.threat_score}</span>`;
-      const bar = card.querySelector('[data-field="bar"]');
-      bar.style.width      = `${t.threat_score}%`;
-      bar.style.background = col;
-      card.className = `threat-card tc-${t.threat_level}`;
-      if (!t.simulated && t.threat_score >= 75) triggerAlert(t);
-    });
-    const empty = tlist.querySelector('.empty');
-    if (empty) empty.remove();
-  } else {
-    tlist.innerHTML = '<div class="empty">No active threats.</div>';
+        if (!t.simulated && t.threat_score >= 75) triggerAlert(t);
+      });
+      const empty = tlist.querySelector('.empty');
+      if (empty) empty.remove();
+    } else {
+      tlist.innerHTML = '<div class="empty">No active threats.</div>';
+    }
   }
 
   drawSpectrum(data.bands || []);
