@@ -1,0 +1,23 @@
+[Unit]
+Description=NSD v19 — Neuro Swarm Disruptor (ChaosTech Defense)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=itchaostech-26
+WorkingDirectory=/home/itchaostech-26/NSD-Prototype
+EnvironmentFile=-/home/itchaostech-26/NSD-Prototype/deploy/nsd.env
+ExecStart=/home/itchaostech-26/NSD-Prototype/venv/bin/python main.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nsd
+
+# Hardening
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
