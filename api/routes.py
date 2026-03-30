@@ -798,3 +798,13 @@ def _register_routes(app: FastAPI):
                 "mode":      drone.mode,
                 "error":     drone.error,
             }
+
+
+@app.get("/api/drone/location")
+def api_drone_location():
+    """Return base coordinates and geofence radius from env."""
+    return {
+        "base_lat": float(os.environ.get("NSD_BASE_LAT", "38.8318")),
+        "base_lon": float(os.environ.get("NSD_BASE_LON", "-76.9700")),
+        "geofence_radius": int(os.environ.get("NSD_GEOFENCE_RADIUS", "500")),
+    }
