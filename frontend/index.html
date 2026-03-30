@@ -546,7 +546,7 @@
 
 <!-- SPLASH SCREEN -->
 <div id="splash">
-  <img src="chaostech-logo.png" alt="ChaosTech Defense" class="splash-logo">
+  <img src="/app/chaostech-logo.png?v=2" alt="ChaosTech Defense" class="splash-logo">
   <div class="splash-title">ChaosTech Defense</div>
   <div class="splash-sub">— NEURAL SPECTRUM DISRUPTOR —</div>
   <div class="splash-tagline">DETECT &nbsp;·&nbsp; CLASSIFY &nbsp;·&nbsp; NEUTRALIZE</div>
@@ -585,7 +585,7 @@
 <!-- HEADER -->
 <div id="header">
   <div class="hdr-left">
-    <img src="chaostech-logo.png" alt="ChaosTech Defense" class="hdr-logo">
+    <img src="/app/chaostech-logo.png?v=2" alt="ChaosTech Defense" class="hdr-logo">
     <div class="hdr-title">&#9632; NSD v19 — Neuro Swarm Disruptor</div>
   </div>
   <div class="hdr-right">
@@ -693,6 +693,7 @@
       </div>
     </div>
     <div id="drone-log"><div class="log-entry log-info">-- drone log --</div></div>
+    <div id="drone-map" style="width:100%;height:260px;margin-top:8px;border:1px solid #1c1c1c;border-radius:3px;"></div>
   </div>
 </div>
 
@@ -1307,7 +1308,7 @@ async function initMap() {
   droneMarker = L.circleMarker(base, { radius: 7, color: '#00ff41', fillColor: '#00ff41', fillOpacity: 0.85 })
     .addTo(nsdMap).bindPopup('INTERCEPT DRONE');
   updateMapDrone();
-  document.getElementById('drone-map-wrap').style.display = 'block';
+  
 }
 
 function updateMapDrone() {

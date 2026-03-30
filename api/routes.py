@@ -806,7 +806,7 @@ def _register_routes(app: FastAPI):
         """Return base coordinates and geofence radius from env."""
         return {
             "base_lat": float(os.environ.get("NSD_BASE_LAT", "38.8318")),
-            "base_lon": float(os.environ.get("NSD_BASE_LON", "-76."-76.9425"")),
+            "base_lon": float(os.environ.get("NSD_BASE_LON", "-76.9425")),
             "geofence_radius": int(os.environ.get("NSD_GEOFENCE_RADIUS", "500")),
         }
 
