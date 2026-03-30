@@ -18,6 +18,9 @@ Endpoints:
   GET  /api/audit           — last 50 audit log entries (auth required)
   POST /api/control         — set system active/mode (auth required)
   POST /api/autonomous      — set autonomous mode config (auth required)
+  POST /api/drone/connect   — connect to intercept drone via MAVLink / SIM
+  POST /api/drone/command   — send flight command (takeoff/land/rth/hover/patrol/emergency)
+  GET  /api/drone/status    — live telemetry snapshot
 """
 
 import os
@@ -26,12 +29,16 @@ import time
 import secrets
 import logging
 import asyncio
+import threading
+import random
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response, RedirectResponse, HTMLResponse
+from pydantic import BaseModel
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi import _rate_limit_exceeded_handler
@@ -53,6 +60,134 @@ _AUDIT_LOG   = []
 
 # Path to index.html — resolved relative to this file
 _FRONTEND_HTML = Path(__file__).parent.parent / "frontend" / "index.html"
+
+# ---------------------------------------------------------------------------
+# Drone state
+# ---------------------------------------------------------------------------
+
+@dataclass
+class DroneState:
+    connected:  bool   = False
+    simulated:  bool   = False
+    ip:         str    = ""
+    state_str:  str    = "DISARMED"
+    altitude:   float  = 0.0
+    battery:    int    = 0
+    gps:        str    = "NO FIX"
+    signal:     str    = "--"
+    mode:       str    = "STABILIZE"
+    error:      str    = ""
+    _vehicle:   object = field(default=None, repr=False)
+    _lock:      threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+drone = DroneState()
+
+try:
+    import dronekit
+    _DRONEKIT_AVAILABLE = True
+    logger.info("DroneKit available — real MAVLink connections enabled")
+except ImportError:
+    _DRONEKIT_AVAILABLE = False
+    logger.warning("DroneKit not installed — drone endpoints will use simulation mode")
+
+
+def _connect_drone_thread(ip: str):
+    conn_str = f"udp:{ip}:14550"
+    logger.info(f"Drone connect thread started — {conn_str}")
+    with drone._lock:
+        drone.ip    = ip
+        drone.error = ""
+
+    if not _DRONEKIT_AVAILABLE:
+        time.sleep(1.2)
+        with drone._lock:
+            drone.connected = True
+            drone.simulated = True
+            drone.state_str = "STANDBY"
+            drone.altitude  = 0.0
+            drone.battery   = random.randint(75, 99)
+            drone.gps       = "3D FIX (8 sats)"
+            drone.signal    = "STRONG"
+            drone.mode      = "GUIDED"
+        logger.info("Drone SIM connected")
+        return
+
+    try:
+        vehicle = dronekit.connect(conn_str, wait_ready=True, timeout=15)
+        with drone._lock:
+            drone._vehicle  = vehicle
+            drone.connected = True
+            drone.simulated = False
+            drone.state_str = str(vehicle.system_status.state)
+            drone.altitude  = vehicle.location.global_relative_frame.alt or 0.0
+            drone.battery   = vehicle.battery.level or 0
+            drone.gps       = f"{vehicle.gps_0.fix_type}D FIX ({vehicle.gps_0.satellites_visible} sats)"
+            drone.signal    = "OK"
+            drone.mode      = vehicle.mode.name
+        logger.info(f"Drone connected via MAVLink: {conn_str}")
+
+        @vehicle.on_attribute('location.global_relative_frame')
+        def _on_location(self, attr_name, value):
+            with drone._lock:
+                drone.altitude = round(value.alt or 0.0, 2)
+
+        @vehicle.on_attribute('battery')
+        def _on_battery(self, attr_name, value):
+            with drone._lock:
+                drone.battery = value.level or 0
+
+        @vehicle.on_attribute('mode')
+        def _on_mode(self, attr_name, value):
+            with drone._lock:
+                drone.mode = value.name
+
+        @vehicle.on_attribute('system_status')
+        def _on_status(self, attr_name, value):
+            with drone._lock:
+                drone.state_str = str(value.state)
+
+    except Exception as e:
+        with drone._lock:
+            drone.connected = False
+            drone.error     = str(e)
+        logger.error(f"Drone connect failed: {e}")
+
+
+def _sim_apply_command(cmd: str):
+    with drone._lock:
+        if cmd == "takeoff":
+            drone.state_str = "ACTIVE"
+            drone.mode      = "GUIDED"
+            drone.altitude  = 20.0
+        elif cmd == "land":
+            drone.state_str = "LANDING"
+            drone.mode      = "LAND"
+            drone.altitude  = 0.0
+        elif cmd == "rth":
+            drone.state_str = "RETURNING"
+            drone.mode      = "RTL"
+        elif cmd == "hover":
+            drone.mode      = "LOITER"
+        elif cmd == "patrol":
+            drone.state_str = "ACTIVE"
+            drone.mode      = "AUTO"
+            drone.altitude  = round(random.uniform(15.0, 40.0), 1)
+        elif cmd == "emergency":
+            drone.state_str = "DISARMED"
+            drone.mode      = "STABILIZE"
+            drone.altitude  = 0.0
+            drone.connected = False
+
+
+def _sim_drone_tick():
+    if not (drone.connected and drone.simulated):
+        return
+    with drone._lock:
+        if drone.state_str == "ACTIVE":
+            drone.altitude = round(
+                max(0.0, min(120.0, drone.altitude + random.uniform(-0.3, 0.5))), 1
+            )
+        drone.battery = max(0, drone.battery - random.randint(0, 1))
 
 
 # ---------------------------------------------------------------------------
@@ -115,13 +250,6 @@ def _threat_to_dict(t) -> dict:
 
 
 def _build_live_frame(app: FastAPI) -> dict:
-    """
-    Build the scan_update payload consumed by frontend updateUI().
-
-    Field mapping (frontend expects):
-      type, timestamp, uptime_s, hardware_ok, simulated,
-      cycle_time_s, bands, threats, threat_count, total_detected
-    """
     classifier: ThreatClassifier = app.state.classifier
     scanner:    SDRScanner       = app.state.scanner
     hw_ok = scanner.hardware_ok
@@ -129,7 +257,6 @@ def _build_live_frame(app: FastAPI) -> dict:
     with state.lock:
         cache = dict(state.cache)
 
-    # Reconstruct per-band rows the frontend band table needs
     bands = []
     for pt in cache.get("points", []):
         bands.append({
@@ -188,14 +315,14 @@ async def _broadcast_loop(app: FastAPI):
         for reading in scan.bands:
             noise_readings.append(reading.noise_floor_db)
             points.append({
-                "freq_mhz":     round(reading.peak_freq_hz / 1e6, 3),
-                "power_db":     reading.peak_power_db,
-                "band":         reading.label,
-                "protocol":     reading.protocol,
-                "snr_db":       reading.snr_db,
+                "freq_mhz":      round(reading.peak_freq_hz / 1e6, 3),
+                "power_db":      reading.peak_power_db,
+                "band":          reading.label,
+                "protocol":      reading.protocol,
+                "snr_db":        reading.snr_db,
                 "bandwidth_khz": round(reading.bandwidth_hz / 1e3, 1),
-                "is_detection": reading.is_detection,
-                "simulated":    reading.simulated,
+                "is_detection":  reading.is_detection,
+                "simulated":     reading.simulated,
             })
             threat = classifier.process_band(reading)
             if threat is not None:
@@ -235,6 +362,9 @@ async def _broadcast_loop(app: FastAPI):
             )
             state.cache["cycle_time_s"]   = scan.cycle_time_s
 
+        # Tick simulated drone telemetry
+        _sim_drone_tick()
+
 
 # ---------------------------------------------------------------------------
 # Lifespan
@@ -242,7 +372,6 @@ async def _broadcast_loop(app: FastAPI):
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    # ── Startup ─────────────────────────────────────────────────────────
     api_token = os.getenv("NSD_API_TOKEN") or secrets.token_hex(16)
     db_path   = os.getenv(
         "NSD_DB_PATH",
@@ -262,7 +391,6 @@ async def _lifespan(app: FastAPI):
 
     scanner.start()
 
-    # Wait briefly so hardware_ok reflects actual SDR init result
     await asyncio.sleep(2.0)
 
     logger.info(f"NSD v19 started | hardware={'yes' if scanner.hardware_ok else 'sim'} "
@@ -272,9 +400,8 @@ async def _lifespan(app: FastAPI):
 
     broadcast_task = asyncio.create_task(_broadcast_loop(app))
 
-    yield  # ── application runs ──
+    yield
 
-    # ── Shutdown ─────────────────────────────────────────────────────────
     broadcast_task.cancel()
     try:
         await broadcast_task
@@ -313,10 +440,7 @@ def _register_routes(app: FastAPI):
     def root_redirect():
         return RedirectResponse(url="/app", status_code=302)
 
-    # ── Frontend — served dynamically so token can be injected ───────────
-    # NOTE: main.py must NOT mount /app as StaticFiles — this route owns it.
-    # Static assets (CSS, JS files if ever split out) can be mounted at
-    # /static separately without conflicting.
+    # ── Frontend ─────────────────────────────────────────────────────────
 
     @app.get("/app", response_class=HTMLResponse)
     @app.get("/app/", response_class=HTMLResponse)
@@ -326,8 +450,6 @@ def _register_routes(app: FastAPI):
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="Frontend not found")
         token = request.app.state.api_token
-        # Inject token as first thing inside <head> so it's available
-        # before any other script runs.
         injection = f'<script>window.NSD_TOKEN="{token}";</script>\n'
         html = html.replace("<head>", "<head>\n" + injection, 1)
         return HTMLResponse(content=html)
@@ -343,7 +465,6 @@ def _register_routes(app: FastAPI):
             while True:
                 with state.lock:
                     ts = state.cache["timestamp"]
-                # Only push when data has changed
                 if ts != last_ts and ts is not None:
                     last_ts = ts
                     frame = _build_live_frame(websocket.app)
@@ -568,3 +689,112 @@ def _register_routes(app: FastAPI):
     async def api_audit(request: Request):
         _require_auth(request)
         return {"audit_log": list(_AUDIT_LOG[-50:])}
+
+    # ── Drone Intercept ───────────────────────────────────────────────────
+
+    class DroneConnectRequest(BaseModel):
+        ip: str = "192.168.0.1"
+
+    class DroneCommandRequest(BaseModel):
+        command: str
+
+    @app.post("/api/drone/connect")
+    @limiter.limit("10/minute")
+    def api_drone_connect(req: DroneConnectRequest, request: Request):
+        """
+        Initiate MAVLink connection to intercept drone.
+        Non-blocking — returns immediately; poll /api/drone/status for result.
+        Falls back to simulation when DroneKit is not installed.
+        """
+        with drone._lock:
+            if drone.connected and drone._vehicle:
+                try:
+                    drone._vehicle.close()
+                except Exception:
+                    pass
+            drone.connected = False
+            drone._vehicle  = None
+
+        t = threading.Thread(
+            target=_connect_drone_thread,
+            args=(req.ip,),
+            daemon=True,
+            name="drone-connect",
+        )
+        t.start()
+
+        mode = "simulation" if not _DRONEKIT_AVAILABLE else "MAVLink"
+        logger.info(f"Drone connect initiated: {req.ip} via {mode}")
+        return {
+            "status":    "ok",
+            "connected": False,
+            "message":   f"Connecting to {req.ip} via {mode}...",
+        }
+
+    @app.post("/api/drone/command")
+    @limiter.limit("30/minute")
+    def api_drone_command(req: DroneCommandRequest, request: Request):
+        """
+        Send flight command to intercept drone.
+        Valid commands: takeoff | land | rth | hover | patrol | emergency
+        """
+        cmd = req.command.lower().strip()
+        VALID = {"takeoff", "land", "rth", "hover", "patrol", "emergency"}
+        if cmd not in VALID:
+            return {"status": "error", "message": f"Unknown command '{cmd}'. Valid: {sorted(VALID)}"}
+
+        with drone._lock:
+            connected = drone.connected
+            vehicle   = drone._vehicle
+            simulated = drone.simulated
+
+        if not connected and cmd != "emergency":
+            return {"status": "error", "message": "Drone not connected"}
+
+        if simulated or not _DRONEKIT_AVAILABLE:
+            _sim_apply_command(cmd)
+            logger.info(f"[SIM] Drone command: {cmd}")
+            return {"status": "ok", "message": f"{cmd.upper()} executed (SIM)"}
+
+        try:
+            import dronekit as dk
+            if cmd == "takeoff":
+                vehicle.mode  = dk.VehicleMode("GUIDED")
+                vehicle.armed = True
+                while not vehicle.armed:
+                    time.sleep(0.5)
+                vehicle.simple_takeoff(20)
+            elif cmd == "land":
+                vehicle.mode = dk.VehicleMode("LAND")
+            elif cmd == "rth":
+                vehicle.mode = dk.VehicleMode("RTL")
+            elif cmd == "hover":
+                vehicle.mode = dk.VehicleMode("LOITER")
+            elif cmd == "patrol":
+                vehicle.mode = dk.VehicleMode("AUTO")
+            elif cmd == "emergency":
+                vehicle.armed = False
+
+            logger.info(f"Drone MAVLink command sent: {cmd}")
+            return {"status": "ok", "message": f"{cmd.upper()} sent"}
+
+        except Exception as e:
+            logger.error(f"Drone command error ({cmd}): {e}")
+            return {"status": "error", "message": str(e)}
+
+    @app.get("/api/drone/status")
+    @limiter.limit("60/minute")
+    def api_drone_status(request: Request):
+        """Return current drone telemetry snapshot."""
+        with drone._lock:
+            return {
+                "connected": drone.connected,
+                "simulated": drone.simulated,
+                "state":     drone.state_str,
+                "altitude":  drone.altitude,
+                "battery":   drone.battery,
+                "gps":       drone.gps,
+                "signal":    drone.signal,
+                "mode":      drone.mode,
+                "error":     drone.error,
+            }
