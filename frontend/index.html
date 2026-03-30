@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NSD v19 — ChaosTech Defense</title>
 <link rel="icon" type="image/png" href="chaostech-logo.png">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
   :root {
     --green:     #00ff41;
@@ -1282,11 +1284,56 @@ window.addEventListener('load', () => {
   connectWS();
   setTimeout(pollREST, 2000);
   setTimeout(fetchHistory, 3000);
+  initMap();
 });
 window.addEventListener('resize', () => { if (lastData) drawSpectrum(lastData.bands || []); });
 setInterval(fetchHistory, 10000);
 document.getElementById('hist-limit').addEventListener('change', fetchHistory);
 document.getElementById('hist-real-only').addEventListener('change', fetchHistory);
+
+// — Map Panel ——————————————————————————————
+let nsdMap = null, droneMarker = null, baseMarker = null, geofenceCircle = null, threatLine = null;
+
+async function initMap() {
+  const loc = await fetch('/api/drone/location').then(r => r.json());
+  const base = [loc.base_lat, loc.base_lon];
+  nsdMap = L.map('drone-map', { zoomControl: true }).setView(base, 15);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap', maxZoom: 19
+  }).addTo(nsdMap);
+  baseMarker = L.circleMarker(base, { radius: 8, color: '#00aaff', fillColor: '#00aaff', fillOpacity: 0.9 })
+    .addTo(nsdMap).bindPopup('BASE / OPERATOR');
+  geofenceCircle = L.circle(base, { radius: loc.geofence_radius, color: '#ff8800', fill: false, dashArray: '6,4', weight: 1.5 }).addTo(nsdMap);
+  droneMarker = L.circleMarker(base, { radius: 7, color: '#00ff41', fillColor: '#00ff41', fillOpacity: 0.85 })
+    .addTo(nsdMap).bindPopup('INTERCEPT DRONE');
+  updateMapDrone();
+  document.getElementById('drone-map-wrap').style.display = 'block';
+}
+
+function updateMapDrone() {
+  fetch('/api/drone/status').then(r => r.json()).then(d => {
+    if (!nsdMap) return;
+    let pos;
+    if (d.gps && d.gps.lat && d.gps.lon) {
+      pos = [d.gps.lat, d.gps.lon];
+    } else {
+      const t = Date.now() / 8000;
+      const base = baseMarker.getLatLng();
+      pos = [base.lat + 0.003 * Math.sin(t), base.lng + 0.003 * Math.cos(t)];
+    }
+    droneMarker.setLatLng(pos);
+  }).catch(() => {});
+  setTimeout(updateMapDrone, 5000);
+}
+
+function updateMapThreat(lat, lon) {
+  if (!nsdMap || !lat || !lon) return;
+  const base = baseMarker.getLatLng();
+  if (threatLine) nsdMap.removeLayer(threatLine);
+  threatLine = L.polyline([[base.lat, base.lng], [lat, lon]], {
+    color: '#ff2222', weight: 2, dashArray: '8,5', opacity: 0.75
+  }).addTo(nsdMap);
+}
 </script>
 </body>
 </html>
