@@ -21,6 +21,7 @@ Endpoints:
   POST /api/drone/connect   — connect to intercept drone via MAVLink / SIM
   POST /api/drone/command   — send flight command (takeoff/land/rth/hover/patrol/emergency)
   GET  /api/drone/status    — live telemetry snapshot
+  GET  /api/drone/location  — base coordinates + geofence radius
 """
 
 import os
@@ -799,68 +800,13 @@ def _register_routes(app: FastAPI):
                 "error":     drone.error,
             }
 
-
-
     @app.get("/api/drone/location")
     def api_drone_location():
         """Return base coordinates and geofence radius from env."""
         return {
-            "base_lat": float(os.environ.get("NSD_BASE_LAT", "38.8318")),
-            "base_lon": float(os.environ.get("NSD_BASE_LON", "-76.9425")),
+            "base_lat":        float(os.environ.get("NSD_BASE_LAT", "38.8318")),
+            "base_lon":        float(os.environ.get("NSD_BASE_LON", "-76.9425")),
             "geofence_radius": int(os.environ.get("NSD_GEOFENCE_RADIUS", "500")),
         }
-
-        # ── Autonomous Intercept Engine ──────────────────────────────────
-        _auto_state = {"enabled": False, "threshold": "HIGH", "cooldown": 60, "last_intercept": 0}
-
-        @app.post("/api/autonomous")
-        @require_token
-        def api_autonomous(request: Request, body: dict = None):
-            """Enable / configure autonomous intercept mode."""
-            import time
-            data = body or {}
-            if "enabled" in data:
-                _auto_state["enabled"] = bool(data["enabled"])
-            if "threshold" in data:
-                _auto_state["threshold"] = str(data["threshold"]).upper()
-            if "cooldown" in data:
-                _auto_state["cooldown"] = int(data["cooldown"])
-            logger.info(f"Autonomous mode updated: {_auto_state}")
-            return {"status": "ok", "autonomous": _auto_state}
-
-        @app.get("/api/autonomous")
-        def api_autonomous_status():
-            """Return current autonomous intercept state."""
-            return {"autonomous": _auto_state}
-
-        def _autonomous_watcher():
-            """Background thread: fires drone intercept on CRITICAL/HIGH threats."""
-            import time
-            LEVELS = ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
-            while True:
-                try:
-                    time.sleep(3)
-                    if not _auto_state["enabled"]:
-                        continue
-                    now = time.time()
-                    if now - _auto_state["last_intercept"] < _auto_state["cooldown"]:
-                        continue
-                    threats = scanner.get_active_threats() if hasattr(scanner, 'get_active_threats') else []
-                    threshold_idx = LEVELS.index(_auto_state["threshold"]) if _auto_state["threshold"] in LEVELS else 2
-                    triggered = [t for t in threats if LEVELS.index(t.get("level", "LOW")) >= threshold_idx]
-                    if triggered:
-                        t = triggered[0]
-                        logger.warning(f"[AUTO] Threat {t.get('id')} triggered intercept — {t.get('freq_mhz')} MHz | {t.get('level')}")
-                        _auto_state["last_intercept"] = now
-                        drone._sim_command("takeoff")
-                        time.sleep(2)
-                        drone._sim_command("patrol")
-                except Exception as e:
-                    logger.error(f"[AUTO] Watcher error: {e}")
-
-        import threading
-        _watcher_thread = threading.Thread(target=_autonomous_watcher, daemon=True)
-        _watcher_thread.start()
-        logger.info("Autonomous intercept watcher started.")
 
     return app
