@@ -555,7 +555,7 @@ def _register_routes(app: FastAPI):
     # ── Detection History ─────────────────────────────────────────────────
 
     @app.get("/api/detections")
-    @limiter.limit("30/minute")
+    @limiter.limit("120/minute")
     def api_detections(request: Request,
                        limit:     int  = 100,
                        real_only: bool = False):
@@ -804,8 +804,8 @@ def _register_routes(app: FastAPI):
     def api_drone_location():
         """Return base coordinates and geofence radius from env."""
         return {
-            "base_lat":        float(os.environ.get("NSD_BASE_LAT", "38.8318")),
-            "base_lon":        float(os.environ.get("NSD_BASE_LON", "-76.9425")),
+            "base_lat":        float(os.environ.get("NSD_BASE_LAT", "38.848617")),
+            "base_lon":        float(os.environ.get("NSD_BASE_LON", "-76.946421")),
             "geofence_radius": int(os.environ.get("NSD_GEOFENCE_RADIUS", "500")),
         }
 
