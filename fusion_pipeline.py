@@ -188,11 +188,13 @@ class FusionEngine:
             features["acoustic_snr"], features["thermal_blobs"],
             alert.fusion_scores,
         )
-        global FUSION_TOTAL, FUSION_CONF_SUM
+        global FUSION_TOTAL, FUSION_CONF_SUM, FUSION_MARGIN_SUM
         FUSION_CLASS_COUNTS[alert.classification] += 1
         FUSION_TOTAL += 1
         FUSION_CONF_SUM += alert.confidence
-        return alert
+        if alert.fusion_scores and len(alert.fusion_scores) >= 2:
+            sorted_scores = sorted(alert.fusion_scores.values(), reverse=True)
+            FUSION_MARGIN_SUM += sorted_scores[0] - sorted_scores[1]
 
 
 class CotBridge:
@@ -221,6 +223,7 @@ from collections import Counter
 FUSION_CLASS_COUNTS: Counter = Counter()
 FUSION_TOTAL: int = 0
 FUSION_CONF_SUM: float = 0.0
+FUSION_MARGIN_SUM: float = 0.0
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
@@ -247,6 +250,7 @@ def metrics() -> Dict[str, Any]:
         "total_fusions": FUSION_TOTAL,
         "avg_confidence": avg_conf,
         "class_counts": dict(FUSION_CLASS_COUNTS),
+        "avg_top_margin": round(FUSION_MARGIN_SUM / FUSION_TOTAL, 4) if FUSION_TOTAL > 0 else 0.0,
         "class_distribution": {
             k: round(v / FUSION_TOTAL, 3) if FUSION_TOTAL > 0 else 0.0
             for k, v in FUSION_CLASS_COUNTS.items()
