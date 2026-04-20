@@ -1,4 +1,4 @@
-# NSD v19 — Python dependencies
+# NSD v19 - Python dependencies
 # Install on Pi: pip install -r requirements.txt
 # System prerequisite: sudo apt-get install rtl-sdr librtlsdr-dev
 
@@ -21,7 +21,3 @@ reportlab==4.2.5
 
 # WebSocket support (uvicorn[standard] includes websockets, explicit pin for clarity)
 websockets==12.0
-
-# Phase 2 — ML classifier (pre-install for future use)
-scikit-learn==1.5.1
-joblib==1.4.2
