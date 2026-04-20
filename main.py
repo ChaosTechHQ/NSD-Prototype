@@ -1,44 +1,52 @@
 """
 main.py — NSD v19 Application Entrypoint
 ChaosTech Defense LLC
-
-Run:
-    python main.py
-
-Environment variables:
-    NSD_API_TOKEN   — shared secret for write endpoints (auto-generated if unset)
-    NSD_HOST        — bind host (default: 0.0.0.0)
-    NSD_PORT        — bind port (default: 8000)
-    NSD_SIM_SEED    — integer seed for deterministic sim mode (optional)
-    NSD_DB_PATH     — override SQLite path (default: ~/nsd-v19/data/signals.db)
 """
-
 import os
 import sys
 import logging
-
 import uvicorn
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-# Ensure backend/ is importable regardless of cwd
+# Ensure backend/ is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "backend"))
 
 from api.routes import create_app
 
+# Configure Logging (Single source of truth)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
+logger = logging.getLogger("nsd.main")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("NSD Prototype starting up...")
+    token = os.getenv("NSD_API_TOKEN")
+    if not token:
+        logger.warning("NSD_API_TOKEN not set. Write endpoints will be unprotected.")
+    yield
+    logger.info("NSD Prototype shutting down...")
 
 app = create_app()
 
-# Mount frontend at /app — NOT at "/" so WebSocket upgrades
-# to the root path are not swallowed by StaticFiles (which
-# only handles HTTP and raises AssertionError on WS scope).
+# Mount Fusion Pipeline sub-app
+try:
+    from fusion_pipeline import app as fusion_app
+    app.mount("/fusion", fusion_app)
+    logger.info("Fusion Pipeline sub-app mounted at /fusion")
+except ImportError:
+    logger.error("Could not import fusion_pipeline.py - check file location")
+
+# Mount frontend
 frontend_dir = os.path.join(os.path.dirname(__file__), "frontend")
 if os.path.isdir(frontend_dir):
     app.mount("/app", StaticFiles(directory=frontend_dir, html=True), name="frontend")
+    logger.info(f"Frontend mounted at /app from {frontend_dir}")
 
 if __name__ == "__main__":
     host = os.getenv("NSD_HOST", "0.0.0.0")
